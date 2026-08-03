@@ -1,0 +1,33 @@
+version: 1
+agent: job_hunter
+name: role_classify
+model:
+  # DeepSeek-v4-flash: cheap 20-token classification, no json_object needed.
+  name: gemini-2.5-flash
+  temperature: 0.0
+  max_tokens: 100
+input_schema:
+  fields:
+    - name: posting_title
+      type: str
+      description: Job posting title
+    - name: posting_snippet
+      type: str
+      description: First 500 chars of description
+template: |
+  Classify this posting into ONE role type: internship, co_op, new_grad, research, experienced, unknown.
+
+  Title: {posting_title}
+  Snippet: {posting_snippet}
+
+  Rules:
+  - "co_op" = co-op, cooperative education, placement year, industrial placement, stage alterné, Praktikum (if tied to university), Werkstudent
+  - "internship" = intern, internship, stage, practicum (not research)
+  - "research" = research intern, PhD internship, research assistant, research scientist intern
+  - "new_grad" = new grad, graduate programme, entry level, junior, associate (first role after degree), campus hire
+  - "experienced" = senior, staff, principal, lead, manager, 3+ years experience required
+  - "unknown" = cannot determine
+
+  Output STRICT JSON only — no fences, no prose.
+  Schema:
+  {{"role_type": "<internship|co_op|new_grad|research|experienced|unknown>"}}

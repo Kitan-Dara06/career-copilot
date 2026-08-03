@@ -1,0 +1,39 @@
+version: 1
+agent: job_hunter
+name: match_judge
+model:
+  # DeepSeek-v4-pro: reliable json_object output, $0.6/M input, fits within
+  # the gray-band cost budget (~1 in 5 postings triggers the judge).
+  name: gemini-2.5-flash
+  temperature: 0.2
+  max_tokens: 400
+input_schema:
+  fields:
+    - name: posting_title
+      type: str
+      description: Job posting title
+    - name: posting_description
+      type: str
+      description: Posting description text (already truncated to ~2000 chars by the agent)
+    - name: user_skills
+      type: str
+      description: Comma-separated list of all user skill tokens (flat, cluster info already encoded in weights outside this call)
+template: |
+  Job title: {posting_title}
+  Job description:
+  ---
+  {posting_description}
+  ---
+
+  User skills (the candidate's inventory):
+  {user_skills}
+
+  Decide whether this posting requires skills the user actually has, and to what
+  degree. Be conservative: if the posting requires explicit skills the user
+  does NOT have ("5 years of Go", "must ship Kubernetes in prod", "PhD in
+  computer vision"), confidence should be lower than 0.5 even if some ambient
+  overlap exists.
+
+  Output STRICT JSON only — no preamble, no markdown fences.
+  Schema:
+  {{"confidence": <float 0-1>, "required_skills_matched": ["..."], "required_skills_missing": ["..."], "reasoning": "1-2 sentences"}}

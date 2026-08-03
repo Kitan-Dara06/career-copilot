@@ -1,0 +1,28 @@
+version: 2
+agent: paper_tracker
+name: why_relevant
+model:
+  name: deepseek-pro
+  temperature: 0.2
+  max_tokens: 100
+input_schema:
+  fields:
+    - name: title
+      type: str
+      description: Paper title
+    - name: abstract
+      type: str
+      description: Paper abstract
+    - name: interests
+      type: str
+      description: Research interests
+    - name: prior_papers
+      type: str
+      description: Previously shown papers to avoid duplicates
+template: |
+  Paper: {title}
+  Abstract: {abstract}
+  User interests: {interests}
+  Previously shown: {prior_papers}
+  Is this paper relevant? Explain in one sentence.
+  If not relevant, respond with "REFUSED".

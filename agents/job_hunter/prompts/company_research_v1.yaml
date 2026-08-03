@@ -1,0 +1,45 @@
+version: 1
+agent: job_hunter
+name: company_research
+model:
+  name: gemini-2.5-flash
+  temperature: 0.3
+  max_tokens: 600
+input_schema:
+  fields:
+    - name: company_name
+      type: str
+      description: Company or organization name
+    - name: search_results
+      type: str
+      description: Concatenated Tavily search results about the company
+    - name: homepage_content
+      type: str
+      description: Firecrawl scraped homepage or about page content
+template: |
+  Build a research brief for this company. Aaliyah is a BSc CS student in Nigeria applying for internships and new-grad roles.
+
+  Company: {company_name}
+
+  Search results:
+  ---
+  {search_results}
+  ---
+
+  Homepage content:
+  ---
+  {homepage_content}
+  ---
+
+  Output STRICT JSON only — no fences, no prose.
+  Schema:
+  {{
+    "summary": "<2-3 sentences about what the company does and why it matters>",
+    "mission": "<1 sentence mission statement>",
+    "products": ["<product 1>", "<product 2>", "..."],
+    "recent_news": ["<headline 1>", "<headline 2>", "..."],
+    "key_people": ["<name: role>", "..."],
+    "hiring_signals": "<1 sentence about what roles they typically hire for and whether they hire interns/new-grads>",
+    "culture_notes": "<1 sentence about work culture, remote friendliness, or notable practices>",
+    "fit_for_aaliyah": "<1 sentence assessing fit: does this company hire BSc-level interns? do they have AI/ML roles? are they Africa-friendly?>"
+  }}

@@ -1,0 +1,41 @@
+version: 1
+agent: job_hunter
+name: parse_careers_page
+model:
+  name: deepseek-v4-pro
+  temperature: 0.0
+  max_tokens: 800
+input_schema:
+  fields:
+    - name: company_name
+      type: str
+      description: Company name for context
+    - name: page_content
+      type: str
+      description: Firecrawl-scraped careers page markdown (truncated to 6000 chars by tool)
+template: |
+  Extract every job opening from this careers page as a JSON array.
+
+  Company: {company_name}
+
+  Page content (markdown):
+  ---
+  {page_content}
+  ---
+
+  For each job listing on the page, extract:
+  - title: the job title exactly as written
+  - url: the link to the job detail page (if visible in the markdown)
+  - location: city/remote info from the listing
+  - is_remote: true if "remote" appears in the title or location, false otherwise
+
+  Rules:
+  - Only include actual job openings. Skip navigation links, footer links, "About Us", "Our Values".
+  - Skip roles that are clearly not relevant to an AI/ML/software engineering candidate (e.g. "Cleaner", "Security Guard", "Accountant", "Receptionist").
+  - Include all engineering, data, product, research, and internship roles.
+  - If no individual job listings are visible, return an empty array.
+  - If a listing has no visible URL, use an empty string for url.
+
+  Output STRICT JSON only — no fences, no prose.
+  Schema:
+  {{"jobs": [{{"title": "<job title>", "url": "<link or empty string>", "location": "<city or remote>", "is_remote": <true|false>}}]}}

@@ -1,0 +1,29 @@
+version: 1
+agent: paper_tracker
+name: email_opener
+model:
+  name: gemini-2.5-flash
+  temperature: 0.5
+  max_tokens: 200
+input_schema:
+  fields:
+    - name: prof_name
+      type: str
+      description: Professor name
+    - name: paper_title
+      type: str
+      description: A specific paper to mention
+    - name: applying_to
+      type: str
+      description: Program or lab name
+    - name: your_area
+      type: str
+      description: Your research focus
+template: |
+  Generate a cold email opener to Professor {prof_name}.
+
+  Mention their paper "{paper_title}" and note why you found it
+  compelling. Explain that you're applying to {applying_to} with a
+  focus on {your_area}. Ask if your interests might align.
+
+  Keep it to 3-4 sentences. Professional but not obsequious.

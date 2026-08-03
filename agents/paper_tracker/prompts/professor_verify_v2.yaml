@@ -1,0 +1,74 @@
+version: 2
+agent: paper_tracker
+name: professor_verify
+model:
+  # DeepSeek-chat's OpenAI-compatible response_format/json_object mode is the
+  # reliable way to get a single JSON object per call. Gemini-2.5-flash with
+  # responseSchema was empirically flaky (returned preambles like
+  # "Here is the JSON requested:" or truncated `{" ~50% of the time), so
+  # verify uses DeepSeek for stability. Brief path stays on Gemini/Qwen.
+  # The ModelClient auto-upgrades to deepseek-v4-pro for response_format=json
+  # (the cheaper v4-flash emits an empty response + finish_reason=length on
+  # ~40% of verify-sized outputs).
+  name: deepseek-chat
+  temperature: 0.0
+  # 2048 is generous headroom for a 7-field JSON object (~250 tokens). With
+  # v4-flash we saw ``finish_reason=length`` truncations at max_tokens=600 —
+  # DeepSeek returns EMPTY content for that case (model policy), not a partial
+  # JSON, which silently rejects every affected candidate. Bump stays cheap.
+  max_tokens: 2048
+input_schema:
+  fields:
+    - name: prof_name
+      type: str
+      description: Candidate author name from Semantic Scholar
+    - name: user_domain
+      type: str
+      description: Comma-separated research keywords the user cares about (for same-name collision check)
+    - name: homepage_markdown
+      type: str
+      description: Markdown scraped from the candidate's homepage / lab page, optionally merged with Tavily search snippets
+template: |
+  You are verifying whether {prof_name} is a faculty member we should recommend
+  to a master's applicant working on these research areas:
+
+  {user_domain}
+
+  Homepage / lab page content (may include Tavily search snippets appended after a separator):
+  ---
+  {homepage_markdown}
+  ---
+
+  Goal: detect SAME-NAME COLLISIONS. Many names (e.g. "Ding Chen", "Xiang-peng Xie",
+  "J. Ong") map to multiple researchers worldwide. Only confirm this {prof_name}
+  if the scraped page is about a professor whose work overlaps the user's domain —
+  NOT an economics professor named "Ding Chen", a control-theory professor named
+  "Xiang-peng Xie", etc.
+
+  Rules:
+  - is_professor = true ONLY for tenured/tenure-track/visiting/emeritus PROFESSOR ranks
+    (Assistant, Associate, Full, Distinguished, Chair, Endowed) or a clear "Professor"
+    title. is_professor = false for PhD / Master's students, postdocs, research
+    scientists, engineers, industry researchers, adjuncts without "Professor",
+    or anyone whose role you cannot confirm from the page.
+  - country: short English country name of the professor's primary academic
+    appointment (e.g. "United States", "China", "Canada", "Germany", "France",
+    "Hong Kong"). Empty string if unknown.
+  - position: verbatim rank phrase (e.g. "Assistant Professor"). Empty if not found.
+  - department: e.g. "Department of Computer Science". Empty if not found.
+  - university: full university name (e.g. "Stanford University"). Empty if not found.
+  - research_area: one short phrase (≤6 words) describing the professor's primary
+    field (e.g. "Information retrieval and NLP", "Power-systems control",
+    "Health economics"). Use what the page says, NOT the user's domain.
+  - domain_match = true ONLY if research_area meaningfully overlaps the user domain
+    keywords above (e.g. an NLP / IR / RAG / agent / retrieval professor matches a
+    user_domain of "retrieval-augmented generation, agent architectures, ..."; a
+    biostatistics or control-theory or economics professor does NOT match).
+  - If the page text is too short / uninformative to confirm anything, set
+    is_professor=false, domain_match=false, and all string fields empty.
+
+  Output STRICT JSON only. No preamble, no "here is the JSON" lead-in, no
+  ```json code fences, no other text outside the JSON object.
+
+  Required JSON shape:
+  {{"is_professor": <bool>, "position": "...", "department": "...", "university": "...", "country": "...", "research_area": "...", "domain_match": <bool>}}

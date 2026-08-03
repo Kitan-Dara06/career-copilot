@@ -1,0 +1,40 @@
+version: 1
+agent: job_hunter
+name: visa_classify
+model:
+  # DeepSeek-v4-flash: cheap structured output, exact-match only.
+  name: gemini-2.5-flash
+  temperature: 0.0
+  max_tokens: 200
+input_schema:
+  fields:
+    - name: posting_text
+      type: str
+      description: Posting body text (truncated to ~1500 chars by the agent)
+    - name: user_visa_requirement
+      type: str
+      description: User's visa requirement, e.g. "need_sponsorship"
+    - name: target_region
+      type: str
+      description: Region country code of the posting (e.g. "canada", "eu", "nigeria")
+template: |
+  Posting text:
+  ---
+  {posting_text}
+  ---
+
+  User requires: {user_visa_requirement}
+  Posting region: {target_region}
+
+  Classify the visa signal in the posting text according to the table:
+    "must be authorized to work in [country]" / "citizenship required"
+        → "no" (no sponsorship)
+    "sponsorship available" / "visa support" / "Global Talent Stream" /
+    "LMIA" / "EU Blue Card"
+        → "yes"
+    No mention
+        → "unknown"
+
+  Output STRICT JSON only — no fences, no prose.
+  Schema:
+  {{"visa_status": "<yes|no|unknown>", "evidence_snippet": "<verbatim 8-20 word quote from posting or empty string>"}}

@@ -1,0 +1,39 @@
+version: 1
+agent: paper_tracker
+name: professor_brief
+model:
+  name: gemini-2.5-flash
+  temperature: 0.4
+  max_tokens: 2000
+input_schema:
+  fields:
+    - name: prof_name
+      type: str
+      description: Professor's name
+    - name: affiliation
+      type: str
+      description: University and lab
+    - name: recent_papers
+      type: str
+      description: List of recent paper titles
+    - name: user_interests
+      type: str
+      description: User's research interests
+template: |
+  Professor: {prof_name}
+  Affiliation: {affiliation}
+  Recent papers: {recent_papers}
+  User interests: {user_interests}
+
+  Build a professor brief with these sections:
+
+  📋 Recent direction (last 12 months):
+     Summarize what themes emerge from the recent papers.
+
+  📌 3 papers the user should read:
+     Pick the 3 strongest titles.
+
+  🔗 Connection to user's interests:
+     ✅ Strong overlap areas
+     ⚠️ Adjacent areas worth exploring
+     ❌ Not the user's area

@@ -1,0 +1,29 @@
+version: 1
+agent: paper_tracker
+name: professor_why
+model:
+  name: gemini-2.5-flash
+  temperature: 0.3
+  max_tokens: 80
+input_schema:
+  fields:
+    - name: title
+      type: str
+      description: Paper title
+    - name: abstract
+      type: str
+      description: Paper abstract
+    - name: professor
+      type: str
+      description: Professor name
+    - name: recent_direction
+      type: str
+      description: Professor's recent research direction
+template: |
+  Paper: {title}
+  Abstract: {abstract}
+  Professor: {professor}
+  Recent direction: {recent_direction}
+
+  Explain in one sentence why this paper fits within the professor's
+  recent research direction. Do not evaluate relevance to the user.

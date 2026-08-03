@@ -1,0 +1,66 @@
+# Career Copilot — CI/CD (source-to-cloud, no Docker)
+#
+# Secrets required (set via: gh secret set NAME --body "..."):
+#   AZURE_CREDENTIALS, TELEGRAMBOTTOKEN, GEMINIAPIKEY, DEEPSEEKAPIKEY
+#   VOYAGEAPIKEY, TAVILYAPIKEY, FIRECRAWLAPIKEY, GITHUBTOKEN, DATABASEURL
+
+name: Deploy to Azure
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Install containerapp CLI
+        run: az extension add --name containerapp --upgrade
+
+      - name: Deploy bot
+        run: |
+          az containerapp up \
+            --name career-copilot-bot \
+            --resource-group career-copilot \
+            --environment career-copilot-env \
+            --location germanywestcentral \
+            --source . \
+            --env-vars \
+              TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAMBOTTOKEN }} \
+              GEMINI_API_KEY=${{ secrets.GEMINIAPIKEY }} \
+              DEEPSEEK_API_KEY=${{ secrets.DEEPSEEKAPIKEY }} \
+              VOYAGE_API_KEY=${{ secrets.VOYAGEAPIKEY }} \
+              DATABASE_URL=${{ secrets.DATABASEURL }} \
+              TAVILY_API_KEY=${{ secrets.TAVILYAPIKEY }} \
+              FIRECRAWL_API_KEY=${{ secrets.FIRECRAWLAPIKEY }} \
+              GITHUB_TOKEN=${{ secrets.GITHUBTOKEN }}
+
+      - name: Deploy worker
+        run: |
+          az containerapp up \
+            --name career-copilot-worker \
+            --resource-group career-copilot \
+            --environment career-copilot-env \
+            --source . \
+            --command "python -m career_copilot worker" \
+            --env-vars \
+              TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAMBOTTOKEN }} \
+              GEMINI_API_KEY=${{ secrets.GEMINIAPIKEY }} \
+              DEEPSEEK_API_KEY=${{ secrets.DEEPSEEKAPIKEY }} \
+              VOYAGE_API_KEY=${{ secrets.VOYAGEAPIKEY }} \
+              DATABASE_URL=${{ secrets.DATABASEURL }} \
+              TAVILY_API_KEY=${{ secrets.TAVILYAPIKEY }} \
+              FIRECRAWL_API_KEY=${{ secrets.FIRECRAWLAPIKEY }} \
+              GITHUB_TOKEN=${{ secrets.GITHUBTOKEN }}
+
+      - name: Notify
+        run: echo "Deployed bot + worker to career-copilot"

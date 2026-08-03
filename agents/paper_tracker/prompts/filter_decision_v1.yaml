@@ -1,0 +1,25 @@
+version: 1
+agent: paper_tracker
+name: filter_decision
+model:
+  name: gemini-2.5-flash
+  temperature: 0.0
+  max_tokens: 20
+input_schema:
+  fields:
+    - name: title
+      type: str
+      description: Paper title
+    - name: abstract
+      type: str
+      description: Paper abstract
+    - name: interests
+      type: str
+      description: Research interests
+template: |
+  Paper: {title}
+  Abstract: {abstract}
+  User interests: {interests}
+
+  Is this paper relevant to the user's research interests?
+  Respond with exactly one word: RELEVANT or REFUSED.

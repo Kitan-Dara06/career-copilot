@@ -1,0 +1,48 @@
+version: 1
+agent: job_hunter
+name: remote_classify
+model:
+  name: gemini-2.5-flash
+  temperature: 0.0
+  max_tokens: 150
+input_schema:
+  fields:
+    - name: posting_title
+      type: str
+      description: Job posting title
+    - name: posting_description
+      type: str
+      description: Posting description (truncated to ~1500 chars by agent)
+    - name: organization
+      type: str
+      description: Company name
+template: |
+  Classify this remote job posting as actually accessible to a developer based in Nigeria (UTC+1, West Africa).
+
+  Title: {posting_title}
+  Organization: {organization}
+  Description:
+  ---
+  {posting_description}
+  ---
+
+  Determine if this posting can practically hire someone working from Nigeria.
+
+  Signals of YES (africa_ok=true):
+    - "remote" is unqualified (no "US only", "EU only", "North America only")
+    - Mentions Africa, Nigeria, EMEA, or "any timezone"
+    - Uses Deel, Remote.com, Oyster, Pilot, Rippling, Multiplier, Papaya Global, or Globalization Partners
+    - Says "remote first", "work from anywhere", "location: global", "worldwide"
+    - Has existing African team members signal ("we have engineers in" + African city)
+    - Accepts UTC±3 or GMT+1 timezone overlap
+
+  Signals of NO (africa_ok=false):
+    - "Must be authorized to work in the US", "US person required"
+    - "Remote (US only)", "Remote (North America only)", "Remote (EU only)"
+    - Requires security clearance
+    - Says "US time zones", "PST/EST hours", "must overlap with US business hours"
+    - Asks for "US work authorization" or "eligible to work in the United States"
+
+  Output STRICT JSON only — no fences, no prose.
+  Schema:
+  {{"africa_ok": <true|false>, "reason": "<1 short sentence>"}}

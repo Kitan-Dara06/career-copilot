@@ -1,0 +1,22 @@
+version: 1
+agent: paper_tracker
+name: summarize_paper
+model:
+  name: gemini-2.5-flash
+  temperature: 0.3
+  max_tokens: 150
+input_schema:
+  fields:
+    - name: title
+      type: str
+      description: Paper title
+    - name: abstract
+      type: str
+      description: Paper abstract
+template: |
+  Title: {title}
+  Abstract: {abstract}
+
+  Summarize this paper in two sentences:
+  1. What problem does it solve?
+  2. What is the key contribution?

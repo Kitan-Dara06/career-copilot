@@ -1,0 +1,25 @@
+version: 1
+agent: paper_tracker
+name: why_relevant
+model:
+  name: deepseek-pro
+  temperature: 0.3
+  max_tokens: 80
+input_schema:
+  fields:
+    - name: title
+      type: str
+      description: Paper title
+    - name: abstract
+      type: str
+      description: Paper abstract
+    - name: interests
+      type: str
+      description: Research interests
+template: |
+  Paper: {title}
+  Abstract: {abstract}
+  User interests: {interests}
+  Is this paper relevant to the user's interests?
+  If yes, explain why in one sentence.
+  If no, respond with "REFUSED".

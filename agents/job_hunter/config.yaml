@@ -1,0 +1,19 @@
+# Job Hunter agent config
+agent: job_hunter
+tools:
+  - jobs.fetch_ats
+  - jobs.fetch_careers_page
+  - jobs.fetch_via_tavily
+  - tavily.search
+  - firecrawl.scrape
+  - structured.get
+  - structured.set
+  - vector.embed
+  - telegram.send_digest
+  - memory.feedback
+read_namespaces:
+  - user/profile
+  - job_hunter/openings
+write_namespaces:
+  - job_hunter/openings
+  - job_hunter/memory

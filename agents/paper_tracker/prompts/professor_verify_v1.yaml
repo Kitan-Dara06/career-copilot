@@ -1,0 +1,45 @@
+version: 1
+agent: paper_tracker
+name: professor_verify
+model:
+  name: gemini-2.5-flash
+  temperature: 0.0
+  max_tokens: 250
+input_schema:
+  fields:
+    - name: prof_name
+      type: str
+      description: Candidate author name from Semantic Scholar
+    - name: homepage_markdown
+      type: str
+      description: Markdown scraped from the candidate's homepage / lab page
+template: |
+  You are verifying whether {prof_name} is a faculty member (professor) we should
+  recommend to a master's applicant, and where in the world they are based.
+
+  Homepage / lab page content (scraped via Firecrawl):
+  ---
+  {homepage_markdown}
+  ---
+
+  Rules:
+  - is_professor = true ONLY for tenured/tenure-track/visiting/emeritus PROFESSOR ranks
+    (Assistant, Associate, Full, Distinguished, Chair, Endowed) or a clear "Professor" title.
+  - is_professor = false for PhD students, Master's students, postdocs, research
+    scientists, engineers, industry researchers, adjuncts without a "Professor" title,
+    or anyone whose role you cannot confirm from the page.
+  - country: the country of the professor's primary academic appointment. Use the
+    English short name (e.g. "United States", "China", "Canada", "Germany", "France",
+    "United Kingdom", "Hong Kong"). If Hong Kong, return "Hong Kong" (we treat it as
+    its own region bucket). Empty string if unknown.
+  - position: the verbatim rank phrase found on the page (e.g. "Assistant Professor",
+    "Full Professor"). Empty string if not found.
+  - department: e.g. "Department of Computer Science". Empty if not found.
+  - university: full university name (e.g. "Stanford University"). Empty if not found.
+
+  Output STRICT JSON only. Do not include any preamble, any "here is the JSON"
+  lead-in, any ```json code fences, or any other text outside the JSON object.
+  If you cannot verify the role, return is_professor=false with empty strings.
+
+  Required JSON shape:
+  {{"is_professor": <bool>, "position": "...", "department": "...", "university": "...", "country": "..."}}

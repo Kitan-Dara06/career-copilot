@@ -1,0 +1,42 @@
+version: 1
+agent: contribution_finder
+name: github_analyze
+model:
+  name: gemini-2.5-flash
+  temperature: 0.2
+  max_tokens: 350
+input_schema:
+  fields:
+    - name: title
+      type: str
+      description: Issue title
+    - name: body_snippet
+      type: str
+      description: First 1500 chars of the issue body
+    - name: repo
+      type: str
+      description: "owner/repo"
+    - name: comments
+      type: str
+      description: Top 3 comment snippets
+    - name: user_skills
+      type: str
+      description: User's top 5 skill clusters, comma-separated
+template: |
+  Analyze this GitHub issue as a contribution opportunity for Aaliyah, a BSc CS student.
+
+  Repo: {repo}
+  Title: {title}
+  Body: {body_snippet}
+  Top comments: {comments}
+  User skills: {user_skills}
+
+  Output STRICT JSON only — no fences, no prose.
+  Schema:
+  {{
+    "problem": "<1-2 sentence summary of what the issue asks for>",
+    "why_it_matters": "<1 sentence: who benefits, what breaks without it>",
+    "suggested_first_steps": "<2-3 concrete technical steps to start>",
+    "estimated_effort": "<one of: 1-4 hours | half day | 1-2 days | 3-5 days | 1+ week>",
+    "blocked_by": "<one of: needs-context | needs-tests | needs-arch-decision | none>"
+  }}

@@ -1,0 +1,32 @@
+version: 1
+agent: job_hunter
+name: extract_skills
+model:
+  name: gemini-2.5-flash
+  temperature: 0.0
+  max_tokens: 400
+input_schema:
+  fields:
+    - name: posting_title
+      type: str
+      description: Job posting title
+    - name: posting_description
+      type: str
+      description: Posting description (truncated to ~2000 chars by agent)
+template: |
+  Extract the required and nice-to-have skills from this job posting.
+
+  Title: {posting_title}
+  Description:
+  ---
+  {posting_description}
+  ---
+
+  Output STRICT JSON only — no fences, no prose.
+  Schema:
+  {{
+    "required_skills": ["<skill 1>", "<skill 2>", "..."],
+    "nice_to_have": ["<skill 1>", "<skill 2>", "..."],
+    "min_experience_years": <integer or null>,
+    "education_required": "<high_school|bachelors|masters|phd|none>"
+  }}

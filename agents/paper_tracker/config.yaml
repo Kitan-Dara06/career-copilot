@@ -1,0 +1,32 @@
+agent: paper_tracker
+system_prompt: agents/paper_tracker/prompts/system_v1.yaml
+tools:
+  - arxiv.fetch_recent
+  - arxiv.fetch_author
+  - vector.embed
+  - vector.search
+  - vector.upsert
+  - structured.get
+  - structured.set
+  - telegram.send_digest
+  - telegram.send_card
+  - memory.feedback
+  - notion.create_page
+  - tavily.search
+  - tavily.extract
+  - firecrawl.scrape
+read_namespaces:
+  - user/profile
+  - user/activity
+  - user/professors
+  - paper_tracker/papers_seen
+  - paper_tracker/papers_summarized
+write_namespaces:
+  - paper_tracker/digests
+  - paper_tracker/papers_seen
+  - paper_tracker/papers_summarized
+  - user/activity
+  - user/professors
+schedule:
+  daily: "0 9 * * 1-5"
+  weekly: "0 20 * * 0"
