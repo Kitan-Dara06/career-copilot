@@ -38,7 +38,7 @@ jobs:
         run: uv python install ${{ env.PYTHON_VERSION }}
 
       - name: Install dependencies
-        run: uv sync --group dev
+        run: uv sync --extra dev
 
       - name: Lint
         run: uv run ruff check . --fix && uv run ruff format . --check
