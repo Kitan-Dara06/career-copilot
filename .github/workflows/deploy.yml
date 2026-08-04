@@ -1,8 +1,13 @@
 # Career Copilot — CI/CD (source-to-cloud, no Docker)
 #
-# Secrets required (set via: gh secret set NAME --body "..."):
-#   AZURE_CREDENTIALS, TELEGRAMBOTTOKEN, GEMINIAPIKEY, DEEPSEEKAPIKEY
-#   VOYAGEAPIKEY, TAVILYAPIKEY, FIRECRAWLAPIKEY, GITHUBTOKEN, DATABASEURL
+# Uses OIDC federated auth (no secrets needed for Azure).
+# Requires: az ad app federated-credential create (see deploy/azure/README.md)
+#
+# GitHub secrets needed:
+#   AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
+#   TELEGRAMBOTTOKEN, GEMINIAPIKEY, DEEPSEEKAPIKEY
+#   VOYAGEAPIKEY, TAVILYAPIKEY, FIRECRAWLAPIKEY
+#   GITHUBTOKEN, DATABASEURL
 
 name: Deploy to Azure
 
@@ -11,6 +16,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  id-token: write   # Required for OIDC
+  contents: read
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -18,10 +27,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Azure login
+      - name: Azure login (OIDC)
         uses: azure/login@v2
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Install containerapp CLI
         run: az extension add --name containerapp --upgrade
