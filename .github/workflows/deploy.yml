@@ -1,10 +1,6 @@
-# Career Copilot — CI/CD (source-to-cloud, no Docker)
+# Career Copilot — CI/CD (build on GitHub, push to ACR, deploy to Container Apps)
 #
-# GitHub secrets needed:
-#   AZURE_CREDENTIALS — JSON from: az ad sp create-for-rbac --sdk-auth
-#   TELEGRAMBOTTOKEN, GEMINIAPIKEY, DEEPSEEKAPIKEY
-#   VOYAGEAPIKEY, TAVILYAPIKEY, FIRECRAWLAPIKEY
-#   GITHUBTOKEN, DATABASEURL
+# No ACR Tasks needed — Docker build runs on the GitHub Actions runner.
 
 name: Deploy to Azure
 
@@ -25,6 +21,14 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
+      - name: Login to ACR
+        run: az acr login --name careercopilot
+
+      - name: Build and push image
+        run: |
+          docker build -t careercopilot.azurecr.io/career-copilot:latest .
+          docker push careercopilot.azurecr.io/career-copilot:latest
+
       - name: Install containerapp CLI
         run: az extension add --name containerapp --upgrade
 
@@ -34,8 +38,10 @@ jobs:
             --name career-copilot-bot \
             --resource-group career-copilot \
             --environment career-copilot-env \
-            --location germanywestcentral \
-            --source . \
+            --image careercopilot.azurecr.io/career-copilot:latest \
+            --registry-server careercopilot.azurecr.io \
+            --registry-username $(az acr credential show --name careercopilot --query username -o tsv) \
+            --registry-password $(az acr credential show --name careercopilot --query "passwords[0].value" -o tsv) \
             --env-vars \
               TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAMBOTTOKEN }} \
               GEMINI_API_KEY=${{ secrets.GEMINIAPIKEY }} \
@@ -52,7 +58,10 @@ jobs:
             --name career-copilot-worker \
             --resource-group career-copilot \
             --environment career-copilot-env \
-            --source . \
+            --image careercopilot.azurecr.io/career-copilot:latest \
+            --registry-server careercopilot.azurecr.io \
+            --registry-username $(az acr credential show --name careercopilot --query username -o tsv) \
+            --registry-password $(az acr credential show --name careercopilot --query "passwords[0].value" -o tsv) \
             --command "python -m career_copilot worker" \
             --env-vars \
               TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAMBOTTOKEN }} \
