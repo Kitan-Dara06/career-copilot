@@ -54,7 +54,7 @@ jobs:
 
       - name: Deploy worker
         run: |
-          az containerapp up \
+          az containerapp create \
             --name career-copilot-worker \
             --resource-group career-copilot \
             --environment career-copilot-env \
@@ -62,7 +62,8 @@ jobs:
             --registry-server careercopilot.azurecr.io \
             --registry-username $(az acr credential show --name careercopilot --query username -o tsv) \
             --registry-password $(az acr credential show --name careercopilot --query "passwords[0].value" -o tsv) \
-            --command "python -m career_copilot worker" \
+            --command "/app/docker-entrypoint.sh worker" \
+            --cpu 0.5 --memory 1.0Gi \
             --env-vars \
               TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAMBOTTOKEN }} \
               GEMINI_API_KEY=${{ secrets.GEMINIAPIKEY }} \
