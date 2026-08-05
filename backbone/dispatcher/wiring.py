@@ -86,13 +86,19 @@ def wire_paper_tracker(dispatcher: Dispatcher) -> None:
     # ── Command handlers ──
 
     async def handle_digest(task: Task) -> TaskResult:
+        import traceback as _tb
         agent = PaperTrackerAgent(task_ctx=_make_ctx())
         args = task.payload.get("args", [])
         sub = args[0] if args else "now"
 
         if sub == "now":
             logger.info("handle_digest_start")
-            result = await agent.run_digest("daily")
+            try:
+                result = await agent.run_digest("daily")
+            except Exception as e:
+                tb = _tb.format_exc()[-500:]
+                logger.exception("handle_digest_error")
+                return TaskResult(task_id=task.id, success=False, error=f"{type(e).__name__}: {e}\n\n{tb}")
             await agent.send_to_telegram(result, task.payload.get("user_id", ""))
             items = len(result.interest_items) + len(result.professor_items)
             logger.info("handle_digest_done", items=items)
