@@ -87,58 +87,57 @@ def wire_paper_tracker(dispatcher: Dispatcher) -> None:
 
     async def handle_digest(task: Task) -> TaskResult:
         import traceback as _tb
-        agent = PaperTrackerAgent(task_ctx=_make_ctx())
-        args = task.payload.get("args", [])
-        sub = args[0] if args else "now"
+        try:
+            agent = PaperTrackerAgent(task_ctx=_make_ctx())
+            args = task.payload.get("args", [])
+            sub = args[0] if args else "now"
 
-        if sub == "now":
-            logger.info("handle_digest_start")
-            try:
+            if sub == "now":
+                logger.info("handle_digest_start")
                 result = await agent.run_digest("daily")
-            except Exception as e:
-                tb = _tb.format_exc()[-500:]
-                logger.exception("handle_digest_error")
-                return TaskResult(task_id=task.id, success=False, error=f"{type(e).__name__}: {e}\n\n{tb}")
-            await agent.send_to_telegram(result, task.payload.get("user_id", ""))
-            items = len(result.interest_items) + len(result.professor_items)
-            logger.info("handle_digest_done", items=items)
-            return TaskResult(task_id=task.id, success=True, output=f"Digest sent ({items} papers).")
+                await agent.send_to_telegram(result, task.payload.get("user_id", ""))
+                items = len(result.interest_items) + len(result.professor_items)
+                logger.info("handle_digest_done", items=items)
+                return TaskResult(task_id=task.id, success=True, output=f"Digest sent ({items} papers).")
 
-        if sub in ("on", "off", "at"):
-            from backbone.db.session import async_session_factory
-            from backbone.tools.scheduler import ScheduleInput, ScheduleTool
+            if sub in ("on", "off", "at"):
+                from backbone.db.session import async_session_factory
+                from backbone.tools.scheduler import ScheduleInput, ScheduleTool
 
-            factory = async_session_factory()
-            if sub == "on":
-                tool = ScheduleTool()
-                await tool(_make_ctx(), ScheduleInput(
-                    job_name="paper_tracker_digest",
-                    cron_expression="0 9 * * *",
-                    payload={"command": "digest", "args": ["now"]},
-                ))
-                return TaskResult(task_id=task.id, success=True, output="Daily digest enabled at 09:00.")
+                factory = async_session_factory()
+                if sub == "on":
+                    tool = ScheduleTool()
+                    await tool(_make_ctx(), ScheduleInput(
+                        job_name="paper_tracker_digest",
+                        cron_expression="0 9 * * *",
+                        payload={"command": "digest", "args": ["now"]},
+                    ))
+                    return TaskResult(task_id=task.id, success=True, output="Daily digest enabled at 09:00.")
 
-            elif sub == "off":
-                from sqlalchemy import text
-                async with factory() as session:
-                    await session.execute(
-                        text("DELETE FROM scheduled_jobs WHERE job_name = 'paper_tracker_digest'")
-                    )
-                    await session.commit()
-                return TaskResult(task_id=task.id, success=True, output="Daily digest disabled.")
+                elif sub == "off":
+                    from sqlalchemy import text
+                    async with factory() as session:
+                        await session.execute(
+                            text("DELETE FROM scheduled_jobs WHERE job_name = 'paper_tracker_digest'")
+                        )
+                        await session.commit()
+                    return TaskResult(task_id=task.id, success=True, output="Daily digest disabled.")
 
-            elif sub == "at":
-                hhmm = args[1] if len(args) > 1 else "09:00"
-                tool = ScheduleTool()
-                # Parse HH:MM to cron "0 HH * * *" (minute zero of that hour every day).
-                await tool(_make_ctx(), ScheduleInput(
-                    job_name="paper_tracker_digest",
-                    cron_expression=f"0 {hhmm.split(':')[0]} * * *",
-                    payload={"command": "digest", "args": ["now"]},
-                ))
-                return TaskResult(task_id=task.id, success=True, output=f"Daily digest set to {hhmm}.")
+                elif sub == "at":
+                    hhmm = args[1] if len(args) > 1 else "09:00"
+                    tool = ScheduleTool()
+                    await tool(_make_ctx(), ScheduleInput(
+                        job_name="paper_tracker_digest",
+                        cron_expression=f"0 {hhmm.split(':')[0]} * * *",
+                        payload={"command": "digest", "args": ["now"]},
+                    ))
+                    return TaskResult(task_id=task.id, success=True, output=f"Daily digest set to {hhmm}.")
 
-        return TaskResult(task_id=task.id, success=True, output=f"Unknown digest sub-command: {sub}")
+            return TaskResult(task_id=task.id, success=True, output=f"Unknown digest sub-command: {sub}")
+        except Exception as e:
+            tb = _tb.format_exc()[-600:]
+            logger.exception("handle_digest_error")
+            return TaskResult(task_id=task.id, success=False, error=f"{type(e).__name__}: {e}\n\n{tb}")
 
     async def handle_discover(task: Task) -> TaskResult:
         logger.info("handle_discover_start")
