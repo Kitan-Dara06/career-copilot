@@ -85,6 +85,16 @@ async def run_polling() -> None:
     if not settings.telegram_bot_token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN not set. Create a .env file first.")
 
+    # Log the DB URL (masked) so we can debug connection issues
+    _db_url = settings.database_url
+    if '@' in _db_url:
+        _proto, _rest = _db_url.split('://', 1)
+        _creds, _host = _rest.split('@', 1)
+        _db_url = f"{_proto}://***@{_host}"
+    print(f"DB URL: {_db_url}")
+    print(f"Qdrant URL: {settings.qdrant_url or '(not set)'}")
+    logger.info("bot_starting", db_url=_db_url, qdrant_url=settings.qdrant_url)
+
     dispatcher = Dispatcher()
     wire_paper_tracker(dispatcher)
     wire_job_hunter(dispatcher)

@@ -135,9 +135,21 @@ def wire_paper_tracker(dispatcher: Dispatcher) -> None:
 
             return TaskResult(task_id=task.id, success=True, output=f"Unknown digest sub-command: {sub}")
         except Exception as e:
-            tb = _tb.format_exc()[-600:]
+            tb = _tb.format_exc()[-800:]
+            from career_copilot.config import get_settings as _gs
+            _s = _gs()
+            # Mask password in the URL for safe display
+            _url = _s.database_url
+            if '@' in _url:
+                _proto, _rest = _url.split('://', 1)
+                _creds, _host = _rest.split('@', 1)
+                _url = f"{_proto}://***@{_host}"
             logger.exception("handle_digest_error")
-            return TaskResult(task_id=task.id, success=False, error=f"{type(e).__name__}: {e}\n\n{tb}")
+            return TaskResult(
+                task_id=task.id,
+                success=False,
+                error=f"{type(e).__name__}: {e}\n\nDB_URL={_url}\n\n{tb}",
+            )
 
     async def handle_discover(task: Task) -> TaskResult:
         logger.info("handle_discover_start")
