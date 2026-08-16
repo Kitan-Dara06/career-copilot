@@ -48,6 +48,8 @@ jobs:
               DEEPSEEK_API_KEY=${{ secrets.DEEPSEEKAPIKEY }} \
               VOYAGE_API_KEY=${{ secrets.VOYAGEAPIKEY }} \
               DATABASE_URL=${{ secrets.DATABASEURL }} \
+              QDRANT_URL=${{ secrets.QDRANTURL }} \
+              QDRANT_API_KEY=${{ secrets.QDRANTAPIKEY }} \
               TAVILY_API_KEY=${{ secrets.TAVILYAPIKEY }} \
               FIRECRAWL_API_KEY=${{ secrets.FIRECRAWLAPIKEY }} \
               GITHUB_TOKEN=${{ secrets.GITHUBTOKEN }}
@@ -70,6 +72,8 @@ jobs:
               DEEPSEEK_API_KEY=${{ secrets.DEEPSEEKAPIKEY }} \
               VOYAGE_API_KEY=${{ secrets.VOYAGEAPIKEY }} \
               DATABASE_URL=${{ secrets.DATABASEURL }} \
+              QDRANT_URL=${{ secrets.QDRANTURL }} \
+              QDRANT_API_KEY=${{ secrets.QDRANTAPIKEY }} \
               TAVILY_API_KEY=${{ secrets.TAVILYAPIKEY }} \
               FIRECRAWL_API_KEY=${{ secrets.FIRECRAWLAPIKEY }} \
               GITHUB_TOKEN=${{ secrets.GITHUBTOKEN }}

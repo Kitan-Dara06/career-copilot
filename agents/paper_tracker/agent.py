@@ -1216,18 +1216,20 @@ class PaperTrackerAgent:
         query_vec = _avg_vector(embed_out.embeddings)
 
         print(f"[digest] Step 4: Vector search in Qdrant (k={top_k})...")
-        search_out = await self._search(
-            self.ctx,
-            VecSearchInput(
-                namespace="paper_tracker/papers_summarized", query_embedding=query_vec, k=top_k
-            ),
-        )
-        print(f"[digest] Step 4 done: {len(search_out.results)} search results")
-
         scored_lookup: dict[str, float] = {}
-        for r in search_out.results:
-            aid = (r.payload or {}).get("arxiv_id", r.point_id)
-            scored_lookup[aid] = r.score
+        try:
+            search_out = await self._search(
+                self.ctx,
+                VecSearchInput(
+                    namespace="paper_tracker/papers_summarized", query_embedding=query_vec, k=top_k
+                ),
+            )
+            print(f"[digest] Step 4 done: {len(search_out.results)} search results")
+            for r in search_out.results:
+                aid = (r.payload or {}).get("arxiv_id", r.point_id)
+                scored_lookup[aid] = r.score
+        except Exception as exc:
+            print(f"[digest] Step 4 Qdrant search unavailable ({exc}) — continuing without similarity")
 
         if not scored_lookup:
             print("[digest] No Qdrant matches yet — first run, showing filtered papers")
