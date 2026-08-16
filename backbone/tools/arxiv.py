@@ -132,19 +132,38 @@ class FetchRecentTool(Tool[FetchRecentInput, FetchRecentOutput]):
             f"&sortBy=submittedDate&sortOrder=descending"
         )
 
+        # Retry with fallback: try HTTPS, then HTTP (some Azure egress
+        # paths and firewalls block one or the other). arXiv mirrors are
+        # reachable on both; the HTTP endpoint avoids the occasional
+        # ECONNREFUSED seen from containerised outbound IPs.
+        candidates = [
+            url,
+            url.replace("https://export.arxiv.org", "http://export.arxiv.org", 1),
+        ]
+
+        last_exc: Exception | None = None
         async with httpx.AsyncClient() as client:
             await _rate_limit()
-            for attempt in range(3):
-                resp = await client.get(url, timeout=30)
-                if resp.status_code == 429:
-                    wait = 10 * (attempt + 1)
-                    print(f"[arxiv] Rate limited, waiting {wait}s (attempt {attempt + 1}/3)...")
-                    await asyncio.sleep(wait)
+            for candidate in candidates:
+                for attempt in range(3):
+                    try:
+                        resp = await client.get(candidate, timeout=30)
+                    except httpx.RequestError as exc:
+                        last_exc = exc
+                        await asyncio.sleep(3 * (attempt + 1))
+                        continue
+                    if resp.status_code == 429:
+                        wait = 10 * (attempt + 1)
+                        print(f"[arxiv] Rate limited, waiting {wait}s (attempt {attempt + 1}/3)...")
+                        await asyncio.sleep(wait)
+                        continue
+                    resp.raise_for_status()
+                    break
+                else:
                     continue
-                resp.raise_for_status()
                 break
             else:
-                resp.raise_for_status()
+                raise RuntimeError(f"arXiv fetch failed after retries: {last_exc}")
 
         root = ElementTree.fromstring(resp.text)
         papers = [_parse_entry(e) for e in root.findall(f"{NS}entry")]
@@ -177,19 +196,33 @@ class FetchAuthorTool(Tool[FetchAuthorInput, FetchAuthorOutput]):
             f"&sortBy=submittedDate&sortOrder=descending"
         )
 
+        candidates = [
+            url,
+            url.replace("https://export.arxiv.org", "http://export.arxiv.org", 1),
+        ]
+        last_exc: Exception | None = None
         async with httpx.AsyncClient() as client:
             await _rate_limit()
-            for attempt in range(3):
-                resp = await client.get(url, timeout=30)
-                if resp.status_code == 429:
-                    wait = 10 * (attempt + 1)
-                    print(f"[arxiv] Rate limited, waiting {wait}s...")
-                    await asyncio.sleep(wait)
+            for candidate in candidates:
+                for attempt in range(3):
+                    try:
+                        resp = await client.get(candidate, timeout=30)
+                    except httpx.RequestError as exc:
+                        last_exc = exc
+                        await asyncio.sleep(3 * (attempt + 1))
+                        continue
+                    if resp.status_code == 429:
+                        wait = 10 * (attempt + 1)
+                        print(f"[arxiv] Rate limited, waiting {wait}s...")
+                        await asyncio.sleep(wait)
+                        continue
+                    resp.raise_for_status()
+                    break
+                else:
                     continue
-                resp.raise_for_status()
                 break
             else:
-                resp.raise_for_status()
+                raise RuntimeError(f"arXiv fetch failed after retries: {last_exc}")
 
         root = ElementTree.fromstring(resp.text)
         papers = [_parse_entry(e) for e in root.findall(f"{NS}entry")]
