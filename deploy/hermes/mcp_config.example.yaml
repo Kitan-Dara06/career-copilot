@@ -1,0 +1,28 @@
+# Career Copilot → Hermes MCP configuration.
+#
+# This block goes into ~/.hermes/config.yaml under `mcp_servers`.
+# It tells Hermes to launch the Career Copilot MCP server as a stdio
+# subprocess and expose only the read-only tools listed in `tools.include`.
+#
+# Install the mcp dependency first:
+#   cd /home/kitan/Documents/mutli-agent && uv sync
+
+mcp_servers:
+  career_copilot:
+    command: "uv"
+    args:
+      - "--directory"
+      - "/home/kitan/Documents/mutli-agent"
+      - "run"
+      - "python"
+      - "-m"
+      - "backbone.mcp.server"
+    enabled: true
+    timeout: 120
+    connect_timeout: 30
+    supports_parallel_tool_calls: false
+    tools:
+      include:
+        - career.profile.get
+      resources: false
+      prompts: false
