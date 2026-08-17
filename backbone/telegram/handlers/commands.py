@@ -108,6 +108,39 @@ async def command_opportunity(update: Update, context: ContextTypes.DEFAULT_TYPE
     await _dispatch(update, context, "opportunity", args)
 
 
+async def command_ask(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle ``/ask <message>`` — route a free-form request to Hermes."""
+    msg = update.effective_message
+    if msg is None:
+        return
+
+    from career_copilot.config import get_settings
+    settings = get_settings()
+    allowed_ids = settings.telegram_chat_id
+    chat_id = str(update.effective_chat.id) if update.effective_chat else ""
+    if allowed_ids and chat_id and allowed_ids != chat_id:
+        await msg.reply_text("Access denied.")
+        return
+
+    args = context.args or []
+    if not args:
+        await msg.reply_text("Usage: /ask <your request>")
+        return
+
+    text = " ".join(args)
+    await msg.reply_text("Thinking…")
+
+    from career_copilot.hermes_bridge import HermesBridge, HermesBridgeError
+    bridge = HermesBridge()
+    try:
+        response = await bridge.submit(text)
+    except HermesBridgeError as exc:
+        await msg.reply_text(f"⚠️ Hermes error: {exc}")
+        return
+
+    await msg.reply_text(response)
+
+
 async def command_help(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``/help`` — show available commands."""
     help_text = (
@@ -141,6 +174,9 @@ async def command_help(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> N
         "Contribution Finder\n"
         "  /contrib [topic]   Find OSS opportunities\n"
         "  /opportunity <id>  Get opportunity details\n"
+        "\n"
+        "Ask (Hermes)\n"
+        "  /ask <request>     Ask anything in natural language\n"
         "\n"
         "  /help              Show this message"
     )

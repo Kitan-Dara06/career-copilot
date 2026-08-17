@@ -67,6 +67,12 @@ class Settings(BaseSettings):
     azure_connection_string: str = ""
     applicationinsights_connection_string: str = ""
 
+    # ── Hermes Agent ──
+    # OpenAI-compatible API server (run `hermes gateway` with API_SERVER_ENABLED=true).
+    hermes_api_url: str = "http://127.0.0.1:8642/v1"
+    hermes_api_key: str = ""
+    hermes_model: str = "hermes-agent"
+
     # ── Scheduling ──
     timezone: str = "Africa/Lagos"
     daily_digest_time: str = "09:00"

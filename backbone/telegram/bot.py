@@ -59,6 +59,7 @@ def build_bot(
     application.add_handler(CommandHandler("contrib", commands.command_contrib))
     application.add_handler(CommandHandler("opportunity", commands.command_opportunity))
     application.add_handler(CommandHandler("help_jh", commands.command_jh_help))
+    application.add_handler(CommandHandler("ask", commands.command_ask))
 
     application.add_handler(CommandHandler("export", commands.command_export_zotero))
     application.add_handler(CommandHandler("start", commands.command_help))
