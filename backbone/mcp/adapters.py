@@ -7,7 +7,7 @@ structure. Adapters do not perform writes and do not leak secrets.
 from __future__ import annotations
 
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote_plus
 from xml.etree import ElementTree
 
 import httpx
@@ -57,15 +57,19 @@ def load_profile() -> dict[str, Any]:
 
 
 async def search_papers(query: str, limit: int = 5) -> list[dict[str, Any]]:
-    """Search arXiv by keyword, newest first.
+    """Search arXiv by keyword, most relevant first.
+
+    Note on encoding: arXiv's API requires ``+`` (not ``%20``) for spaces in
+    ``search_query`` — with ``%20`` it silently treats the terms as OR and
+    returns noise. ``sortBy=relevance`` then ranks multi-term matches first.
 
     Returns a compact list of papers with id, title, authors, abstract
     excerpt, publish date, and URL. Used by ``career.papers.search``.
     """
     url = (
-        f"{_ARXIV_API}?search_query=all:{quote(query)}"
+        f"{_ARXIV_API}?search_query=all:{quote_plus(query)}"
         f"&start=0&max_results={max(1, min(int(limit), 20))}"
-        f"&sortBy=submittedDate&sortOrder=descending"
+        f"&sortBy=relevance&sortOrder=descending"
     )
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.get(url)
