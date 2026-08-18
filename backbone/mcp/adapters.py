@@ -19,29 +19,16 @@ from career_copilot.config.paths import DATA_DIR
 _ARXIV_NS = "{http://www.w3.org/2005/Atom}"
 _ARXIV_API = "https://export.arxiv.org/api/query"
 
-# Words that add noise when used as standalone ILIKE tokens in DB searches.
-_STOPWORDS = {
-    "the", "for", "and", "with", "doing", "find", "search", "any", "some",
-    "recent", "about", "that", "this", "from", "have", "has", "are", "were",
-    "what", "where", "who", "how", "can", "could", "would", "should", "will",
-    "into", "their", "them", "there", "jobs", "job", "professor", "professors",
-    "papers", "paper", "list", "show", "get", "me", "my", "at", "in", "on",
-}
 
+def _tsvector_expr(columns: str) -> str:
+    """Postgres tsvector over the given columns, null-safe.
 
-def _search_tokens(query: str) -> list[str]:
-    """Split a natural-language query into meaningful match tokens.
-
-    "professors at McGill doing retrieval" -> ["McGill", "retrieval"].
-    This lets DB ILIKE searches match ANY token instead of requiring the
-    whole phrase, which would never match a stored affiliation string.
+    ``plainto_tsquery`` (used in the WHERE clauses) handles stopword
+    removal and stemming natively, so no hand-rolled stopword list is
+    needed. ``ts_rank`` orders by match quality.
     """
-    out: list[str] = []
-    for t in query.split():
-        t = t.strip(",.!?;:'\"()[]")
-        if len(t) > 2 and t.lower() not in _STOPWORDS:
-            out.append(t)
-    return out[:8]
+    parts = [f"coalesce({c}, '')" for c in columns]
+    return f"to_tsvector('english', {' || '.join(parts)})"
 
 
 def _load_yaml(name: str) -> dict[str, Any]:
@@ -126,34 +113,29 @@ async def search_papers(query: str, limit: int = 5) -> list[dict[str, Any]]:
 async def search_professors(query: str, limit: int = 10) -> list[dict[str, Any]]:
     """Search the professor watchlist by name or affiliation.
 
-    The query is tokenized so natural phrases like "McGill doing retrieval"
-    match any token (McGill OR retrieval) against name/affiliation.
+    Uses Postgres full-text search: stopwords and stemming are handled by
+    the ``english`` dictionary, and results are ranked by ``ts_rank``.
     """
     from sqlalchemy import text
 
     from backbone.db.session import async_session_factory
 
-    tokens = _search_tokens(query)
-    if not tokens:
+    if not query or not query.strip():
         return []
-    clauses: list[str] = []
-    params: dict[str, Any] = {"limit": max(1, min(int(limit), 50))}
-    for i, tok in enumerate(tokens):
-        params[f"q{i}"] = f"%{tok}%"
-        clauses.append(f"(name ILIKE :q{i} OR affiliation ILIKE :q{i})")
-    where = " OR ".join(clauses)
+    q = query.strip()
+    ts = _tsvector_expr(["name", "affiliation"])
 
     factory = async_session_factory()
     async with factory() as session:
         result = await session.execute(
             text(
-                "SELECT name, affiliation, homepage_url, added_at"
-                " FROM professors"
-                f" WHERE {where}"
-                " ORDER BY added_at DESC"
+                "SELECT name, affiliation, homepage_url, added_at,"
+                f" ts_rank({ts}, plainto_tsquery('english', :q)) AS rank"
+                f" FROM professors WHERE {ts} @@ plainto_tsquery('english', :q)"
+                " ORDER BY rank DESC, added_at DESC"
                 " LIMIT :limit"
             ),
-            params,
+            {"q": q, "limit": max(1, min(int(limit), 50))},
         )
         rows = result.all()
     return [
@@ -174,28 +156,30 @@ async def search_jobs(
 ) -> list[dict[str, Any]]:
     """Search discovered job openings by keyword and/or region.
 
-    The query is tokenized so natural phrases like "ML engineer jobs in
-    nigeria" match any token against title, organization, or description.
+    Keyword matching uses Postgres full-text search (ranked); ``region``
+    is an exact match on the stored region field.
     """
     from sqlalchemy import text
 
     from backbone.db.session import async_session_factory
 
-    clauses: list[str] = []
+    ts = _tsvector_expr(["title", "organization", "description"])
+    conditions: list[str] = []
     params: dict[str, Any] = {"limit": max(1, min(int(limit), 50))}
-    tokens = _search_tokens(query or "")
-    if tokens:
-        tok_clauses: list[str] = []
-        for i, tok in enumerate(tokens):
-            params[f"q{i}"] = f"%{tok}%"
-            tok_clauses.append(
-                f"(title ILIKE :q{i} OR organization ILIKE :q{i} OR description ILIKE :q{i})"
-            )
-        clauses.append("(" + " OR ".join(tok_clauses) + ")")
+
+    has_query = bool(query and query.strip())
+    if has_query:
+        conditions.append(f"{ts} @@ plainto_tsquery('english', :q)")
+        params["q"] = query.strip()
     if region:
-        clauses.append("region = :region")
+        conditions.append("region = :region")
         params["region"] = region
-    where = " AND ".join(clauses) if clauses else "TRUE"
+
+    where = " AND ".join(conditions) if conditions else "TRUE"
+    if has_query:
+        order = f"ts_rank({ts}, plainto_tsquery('english', :q)) DESC, posted_at DESC NULLS LAST"
+    else:
+        order = "posted_at DESC NULLS LAST"
 
     factory = async_session_factory()
     async with factory() as session:
@@ -204,7 +188,7 @@ async def search_jobs(
                 "SELECT title, organization, region, location, remote_ok,"
                 " application_url, posted_at"
                 f" FROM job_hunter_openings WHERE {where}"
-                " ORDER BY posted_at DESC NULLS LAST"
+                f" ORDER BY {order}"
                 " LIMIT :limit"
             ),
             params,

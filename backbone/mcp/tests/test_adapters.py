@@ -8,7 +8,6 @@ import httpx
 import respx
 
 from backbone.mcp.adapters import (
-    _search_tokens,
     load_profile,
     search_jobs,
     search_papers,
@@ -36,12 +35,6 @@ def test_load_profile_has_keywords() -> None:
 
 
 # ── Papers (arXiv, mocked HTTP) ──
-
-
-def test_search_tokens_drops_stopwords() -> None:
-    assert _search_tokens("professors at McGill doing retrieval") == ["McGill", "retrieval"]
-    assert _search_tokens("ML engineer jobs in nigeria") == ["engineer", "nigeria"]
-    assert _search_tokens("") == []
 
 
 @respx.mock
@@ -132,6 +125,12 @@ async def test_search_professors(monkeypatch: Any) -> None:
     assert len(rows) == 1
     assert rows[0]["name"] == "Jane Prof"
     assert rows[0]["affiliation"] == "McGill"
+
+
+async def test_search_professors_empty_query_returns_empty(monkeypatch: Any) -> None:
+    _patch_session_factory(monkeypatch, [_FakeRow(name="X", affiliation="Y", homepage_url=None, added_at=None)])
+    assert await search_professors("") == []
+    assert await search_professors("   ") == []
 
 
 async def test_search_jobs_filters_by_query(monkeypatch: Any) -> None:
