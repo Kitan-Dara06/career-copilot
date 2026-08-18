@@ -8,6 +8,7 @@ import httpx
 import respx
 
 from backbone.mcp.adapters import (
+    _search_tokens,
     load_profile,
     search_jobs,
     search_papers,
@@ -35,6 +36,12 @@ def test_load_profile_has_keywords() -> None:
 
 
 # ── Papers (arXiv, mocked HTTP) ──
+
+
+def test_search_tokens_drops_stopwords() -> None:
+    assert _search_tokens("professors at McGill doing retrieval") == ["McGill", "retrieval"]
+    assert _search_tokens("ML engineer jobs in nigeria") == ["engineer", "nigeria"]
+    assert _search_tokens("") == []
 
 
 @respx.mock

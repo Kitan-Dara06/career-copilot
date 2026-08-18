@@ -19,6 +19,30 @@ from career_copilot.config.paths import DATA_DIR
 _ARXIV_NS = "{http://www.w3.org/2005/Atom}"
 _ARXIV_API = "https://export.arxiv.org/api/query"
 
+# Words that add noise when used as standalone ILIKE tokens in DB searches.
+_STOPWORDS = {
+    "the", "for", "and", "with", "doing", "find", "search", "any", "some",
+    "recent", "about", "that", "this", "from", "have", "has", "are", "were",
+    "what", "where", "who", "how", "can", "could", "would", "should", "will",
+    "into", "their", "them", "there", "jobs", "job", "professor", "professors",
+    "papers", "paper", "list", "show", "get", "me", "my", "at", "in", "on",
+}
+
+
+def _search_tokens(query: str) -> list[str]:
+    """Split a natural-language query into meaningful match tokens.
+
+    "professors at McGill doing retrieval" -> ["McGill", "retrieval"].
+    This lets DB ILIKE searches match ANY token instead of requiring the
+    whole phrase, which would never match a stored affiliation string.
+    """
+    out: list[str] = []
+    for t in query.split():
+        t = t.strip(",.!?;:'\"()[]")
+        if len(t) > 2 and t.lower() not in _STOPWORDS:
+            out.append(t)
+    return out[:8]
+
 
 def _load_yaml(name: str) -> dict[str, Any]:
     """Load a YAML file from the data directory, returning {} if missing."""
@@ -100,10 +124,24 @@ async def search_papers(query: str, limit: int = 5) -> list[dict[str, Any]]:
 
 
 async def search_professors(query: str, limit: int = 10) -> list[dict[str, Any]]:
-    """Search the professor watchlist by name or affiliation."""
+    """Search the professor watchlist by name or affiliation.
+
+    The query is tokenized so natural phrases like "McGill doing retrieval"
+    match any token (McGill OR retrieval) against name/affiliation.
+    """
     from sqlalchemy import text
 
     from backbone.db.session import async_session_factory
+
+    tokens = _search_tokens(query)
+    if not tokens:
+        return []
+    clauses: list[str] = []
+    params: dict[str, Any] = {"limit": max(1, min(int(limit), 50))}
+    for i, tok in enumerate(tokens):
+        params[f"q{i}"] = f"%{tok}%"
+        clauses.append(f"(name ILIKE :q{i} OR affiliation ILIKE :q{i})")
+    where = " OR ".join(clauses)
 
     factory = async_session_factory()
     async with factory() as session:
@@ -111,11 +149,11 @@ async def search_professors(query: str, limit: int = 10) -> list[dict[str, Any]]
             text(
                 "SELECT name, affiliation, homepage_url, added_at"
                 " FROM professors"
-                " WHERE name ILIKE :q OR affiliation ILIKE :q"
+                f" WHERE {where}"
                 " ORDER BY added_at DESC"
                 " LIMIT :limit"
             ),
-            {"q": f"%{query}%", "limit": max(1, min(int(limit), 50))},
+            params,
         )
         rows = result.all()
     return [
@@ -134,16 +172,26 @@ async def search_jobs(
     region: str | None = None,
     limit: int = 10,
 ) -> list[dict[str, Any]]:
-    """Search discovered job openings by keyword and/or region."""
+    """Search discovered job openings by keyword and/or region.
+
+    The query is tokenized so natural phrases like "ML engineer jobs in
+    nigeria" match any token against title, organization, or description.
+    """
     from sqlalchemy import text
 
     from backbone.db.session import async_session_factory
 
     clauses: list[str] = []
     params: dict[str, Any] = {"limit": max(1, min(int(limit), 50))}
-    if query:
-        clauses.append("(title ILIKE :q OR organization ILIKE :q OR description ILIKE :q)")
-        params["q"] = f"%{query}%"
+    tokens = _search_tokens(query or "")
+    if tokens:
+        tok_clauses: list[str] = []
+        for i, tok in enumerate(tokens):
+            params[f"q{i}"] = f"%{tok}%"
+            tok_clauses.append(
+                f"(title ILIKE :q{i} OR organization ILIKE :q{i} OR description ILIKE :q{i})"
+            )
+        clauses.append("(" + " OR ".join(tok_clauses) + ")")
     if region:
         clauses.append("region = :region")
         params["region"] = region
