@@ -6,8 +6,9 @@ keeps Hermes's heavily-pinned dependency graph out of Career Copilot's
 process and lets Hermes run in a separate container.
 
 The bridge is intentionally narrow: it submits a message and returns the
-final text. Conversation history, session state, and run budgets are owned
-by Career Copilot, not Hermes.
+final text. Conversation history is tracked per chat in-memory (bounded),
+because the API server is stateless and every request must carry the full
+conversation for multi-turn exchanges (e.g. Hermes clarification answers).
 """
 
 from __future__ import annotations
@@ -17,6 +18,10 @@ from typing import Any
 import httpx
 
 from career_copilot.config import get_settings
+
+# Keep the last 10 messages (5 turns) per chat — enough for clarification
+# exchanges and follow-ups without unbounded memory growth.
+MAX_HISTORY_MESSAGES = 10
 
 
 class HermesBridgeError(Exception):
@@ -28,20 +33,28 @@ class HermesBridge:
 
     def __init__(self) -> None:
         self._settings = get_settings()
+        self._history: dict[str, list[dict[str, str]]] = {}
+
+    def clear_history(self, chat_id: str) -> None:
+        """Forget the conversation for a chat (e.g. a /new command)."""
+        self._history.pop(chat_id, None)
 
     async def submit(
         self,
         message: str,
         *,
-        history: list[dict[str, str]] | None = None,
+        chat_id: str = "default",
         system_prompt: str | None = None,
         timeout: float = 120.0,
     ) -> str:
         """Send a message to Hermes and return the final text.
 
+        The per-chat history is sent with every request (the API server is
+        stateless) and updated with the exchange on success.
+
         Args:
             message: The user's latest message.
-            history: Prior turns as ``[{"role": "user"|"assistant", "content": ...}]``.
+            chat_id: Conversation key; isolates history per chat.
             system_prompt: Optional system instruction for this turn.
             timeout: HTTP timeout in seconds. The agent loop can take a while.
 
@@ -57,10 +70,11 @@ class HermesBridge:
         if self._settings.hermes_api_key:
             headers["Authorization"] = f"Bearer {self._settings.hermes_api_key}"
 
+        history = self._history.get(chat_id, [])
         messages: list[dict[str, str]] = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
-        messages.extend(history or [])
+        messages.extend(history)
         messages.append({"role": "user", "content": message})
 
         payload: dict[str, Any] = {
@@ -88,5 +102,10 @@ class HermesBridge:
 
         if not content:
             raise HermesBridgeError("Hermes API returned empty content")
+
+        # Persist the exchange so a follow-up ("yes") has context.
+        history.append({"role": "user", "content": message})
+        history.append({"role": "assistant", "content": content})
+        self._history[chat_id] = history[-MAX_HISTORY_MESSAGES:]
 
         return content

@@ -133,7 +133,7 @@ async def command_ask(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     from career_copilot.hermes_bridge import HermesBridge, HermesBridgeError
     bridge = HermesBridge()
     try:
-        response = await bridge.submit(text)
+        response = await bridge.submit(text, chat_id=chat_id)
     except HermesBridgeError as exc:
         await msg.reply_text(f"⚠️ Hermes error: {exc}")
         return
