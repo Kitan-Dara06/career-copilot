@@ -108,37 +108,127 @@ async def command_opportunity(update: Update, context: ContextTypes.DEFAULT_TYPE
     await _dispatch(update, context, "opportunity", args)
 
 
+# ── Hermes conversational layer ─────────────────────────────
+
+# Active Hermes runs per chat: chat_id -> asyncio.Task. Used for
+# concurrency guards and /cancel.
+_hermes_runs: dict[str, Any] = {}
+
+
+def _chat_id(update: Update) -> str:
+    """Return the effective chat id as a string, or 'default'."""
+    if update.effective_chat:
+        return str(update.effective_chat.id)
+    return "default"
+
+
+def _is_allowed(update: Update) -> bool:
+    """Chat allowlist check — shared by all Hermes entry points."""
+    from career_copilot.config import get_settings
+
+    allowed_ids = get_settings().telegram_chat_id
+    chat_id = str(update.effective_chat.id) if update.effective_chat else ""
+    return not (allowed_ids and chat_id and allowed_ids != chat_id)
+
+
+async def _hermes_respond(msg: Any, chat_id: str, text: str) -> None:
+    """Run a Hermes request and reply when done.
+
+    Runs in a background task so a slow agent loop does not block the
+    Telegram polling loop. Cancellation propagates cleanly.
+    """
+    import asyncio
+
+    from career_copilot.hermes_bridge import HermesBridgeError, get_bridge
+
+    bridge = get_bridge()
+    try:
+        response = await bridge.submit(text, chat_id=chat_id)
+    except asyncio.CancelledError:
+        raise
+    except HermesBridgeError as exc:
+        response = f"⚠️ Hermes error: {exc}"
+    finally:
+        _hermes_runs.pop(chat_id, None)
+    try:
+        await msg.reply_text(response)
+    except Exception:
+        pass  # Telegram delivery failure is not worth crashing the loop
+
+
+async def _ask_hermes(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
+    """Shared entry point for /ask and free-form messages."""
+    import asyncio
+
+    msg = update.effective_message
+    if msg is None or not text.strip():
+        return
+    if not _is_allowed(update):
+        await msg.reply_text("Access denied.")
+        return
+
+    chat_id = _chat_id(update)
+    existing = _hermes_runs.get(chat_id)
+    if existing is not None and not existing.done():
+        await msg.reply_text("Still working on your previous request…")
+        return
+
+    await msg.reply_text("Thinking…")
+    task = asyncio.create_task(_hermes_respond(msg, chat_id, text.strip()))
+    _hermes_runs[chat_id] = task
+
+
 async def command_ask(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``/ask <message>`` — route a free-form request to Hermes."""
     msg = update.effective_message
     if msg is None:
         return
-
-    from career_copilot.config import get_settings
-    settings = get_settings()
-    allowed_ids = settings.telegram_chat_id
-    chat_id = str(update.effective_chat.id) if update.effective_chat else ""
-    if allowed_ids and chat_id and allowed_ids != chat_id:
-        await msg.reply_text("Access denied.")
-        return
-
     args = context.args or []
     if not args:
         await msg.reply_text("Usage: /ask <your request>")
         return
+    await _ask_hermes(update, context, " ".join(args))
 
-    text = " ".join(args)
-    await msg.reply_text("Thinking…")
 
-    from career_copilot.hermes_bridge import HermesBridge, HermesBridgeError
-    bridge = HermesBridge()
-    try:
-        response = await bridge.submit(text, chat_id=chat_id)
-    except HermesBridgeError as exc:
-        await msg.reply_text(f"⚠️ Hermes error: {exc}")
+async def command_freeform(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Route plain-text messages (no leading slash) to Hermes."""
+    msg = update.effective_message
+    if msg is None or not msg.text:
         return
+    text = msg.text.strip()
+    if not text or text.startswith("/"):
+        return  # commands are handled by CommandHandler
+    await _ask_hermes(update, context, text)
 
-    await msg.reply_text(response)
+
+async def command_cancel(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle ``/cancel`` — cancel the active Hermes run for this chat."""
+    msg = update.effective_message
+    if msg is None:
+        return
+    if not _is_allowed(update):
+        await msg.reply_text("Access denied.")
+        return
+    task = _hermes_runs.get(_chat_id(update))
+    if task is not None and not task.done():
+        task.cancel()
+        await msg.reply_text("Cancelled.")
+    else:
+        await msg.reply_text("Nothing in progress.")
+
+
+async def command_new(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle ``/new`` — reset the Hermes conversation for this chat."""
+    msg = update.effective_message
+    if msg is None:
+        return
+    if not _is_allowed(update):
+        await msg.reply_text("Access denied.")
+        return
+    from career_copilot.hermes_bridge import get_bridge
+
+    get_bridge().clear_history(_chat_id(update))
+    await msg.reply_text("Conversation reset.")
 
 
 async def command_help(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -176,7 +266,10 @@ async def command_help(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> N
         "  /opportunity <id>  Get opportunity details\n"
         "\n"
         "Ask (Hermes)\n"
-        "  /ask <request>     Ask anything in natural language\n"
+        "  <message>          Ask anything in natural language\n"
+        "  /ask <request>     Same, explicit\n"
+        "  /cancel            Cancel the active request\n"
+        "  /new               Reset the conversation\n"
         "\n"
         "  /help              Show this message"
     )

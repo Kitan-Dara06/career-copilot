@@ -9,6 +9,10 @@ The bridge is intentionally narrow: it submits a message and returns the
 final text. Conversation history is tracked per chat in-memory (bounded),
 because the API server is stateless and every request must carry the full
 conversation for multi-turn exchanges (e.g. Hermes clarification answers).
+
+Use ``get_bridge()`` — a module singleton — so history survives across
+requests. Constructing ``HermesBridge()`` directly starts with empty
+history every time.
 """
 
 from __future__ import annotations
@@ -50,7 +54,8 @@ class HermesBridge:
         """Send a message to Hermes and return the final text.
 
         The per-chat history is sent with every request (the API server is
-        stateless) and updated with the exchange on success.
+        stateless) and updated with the exchange on success. Emits an OTel
+        span ``hermes.submit`` with model, chat, and history size.
 
         Args:
             message: The user's latest message.
@@ -65,6 +70,8 @@ class HermesBridge:
             HermesBridgeError: If the API is unreachable, misconfigured, or
                 returns no content.
         """
+        from backbone.observability import get_tracer
+
         url = self._settings.hermes_api_url.rstrip("/") + "/chat/completions"
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if self._settings.hermes_api_key:
@@ -83,25 +90,34 @@ class HermesBridge:
             "stream": False,
         }
 
-        try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                resp = await client.post(url, json=payload, headers=headers)
-        except httpx.HTTPError as exc:
-            raise HermesBridgeError(f"Hermes API unreachable: {exc}") from exc
+        tracer = get_tracer("hermes_bridge")
+        with tracer.start_as_current_span("hermes.submit") as span:
+            span.set_attribute("hermes.model", self._settings.hermes_model)
+            span.set_attribute("hermes.chat_id", chat_id)
+            span.set_attribute("hermes.history_len", len(history))
+            try:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    resp = await client.post(url, json=payload, headers=headers)
+            except httpx.HTTPError as exc:
+                raise HermesBridgeError(f"Hermes API unreachable: {exc}") from exc
 
-        if resp.status_code != 200:
-            raise HermesBridgeError(
-                f"Hermes API returned {resp.status_code}: {resp.text[:300]}"
-            )
+            if resp.status_code != 200:
+                raise HermesBridgeError(
+                    f"Hermes API returned {resp.status_code}: {resp.text[:300]}"
+                )
 
-        try:
-            data = resp.json()
-            content = data["choices"][0]["message"]["content"].strip()
-        except (KeyError, IndexError, ValueError) as exc:
-            raise HermesBridgeError(f"Hermes API response malformed: {resp.text[:300]}") from exc
+            try:
+                data = resp.json()
+                content = data["choices"][0]["message"]["content"].strip()
+            except (KeyError, IndexError, ValueError) as exc:
+                raise HermesBridgeError(
+                    f"Hermes API response malformed: {resp.text[:300]}"
+                ) from exc
 
-        if not content:
-            raise HermesBridgeError("Hermes API returned empty content")
+            if not content:
+                raise HermesBridgeError("Hermes API returned empty content")
+
+            span.set_attribute("hermes.output_len", len(content))
 
         # Persist the exchange so a follow-up ("yes") has context.
         history.append({"role": "user", "content": message})
@@ -109,3 +125,14 @@ class HermesBridge:
         self._history[chat_id] = history[-MAX_HISTORY_MESSAGES:]
 
         return content
+
+
+_bridge: HermesBridge | None = None
+
+
+def get_bridge() -> HermesBridge:
+    """Return the module-level singleton bridge (history persists)."""
+    global _bridge
+    if _bridge is None:
+        _bridge = HermesBridge()
+    return _bridge

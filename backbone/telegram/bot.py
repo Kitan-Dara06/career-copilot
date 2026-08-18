@@ -13,6 +13,8 @@ from telegram.ext import (
     Application,
     CallbackQueryHandler,
     CommandHandler,
+    MessageHandler,
+    filters,
 )
 
 from backbone.dispatcher.dispatcher import Dispatcher
@@ -60,6 +62,13 @@ def build_bot(
     application.add_handler(CommandHandler("opportunity", commands.command_opportunity))
     application.add_handler(CommandHandler("help_jh", commands.command_jh_help))
     application.add_handler(CommandHandler("ask", commands.command_ask))
+    application.add_handler(CommandHandler("cancel", commands.command_cancel))
+    application.add_handler(CommandHandler("new", commands.command_new))
+
+    # ── Free-form text → Hermes ──
+    application.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, commands.command_freeform)
+    )
 
     application.add_handler(CommandHandler("export", commands.command_export_zotero))
     application.add_handler(CommandHandler("start", commands.command_help))

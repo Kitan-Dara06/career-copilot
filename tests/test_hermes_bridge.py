@@ -5,7 +5,8 @@ from __future__ import annotations
 import httpx
 import respx
 
-from career_copilot.hermes_bridge import HermesBridge, HermesBridgeError
+import career_copilot.hermes_bridge as hb
+from career_copilot.hermes_bridge import HermesBridge, HermesBridgeError, get_bridge
 
 
 @respx.mock
@@ -99,6 +100,36 @@ async def test_clear_history() -> None:
 
     second_body = respx.calls[1].request.content.decode()
     assert "first" not in second_body
+
+
+def test_get_bridge_is_singleton() -> None:
+    hb._bridge = None  # reset for test isolation
+    a = get_bridge()
+    b = get_bridge()
+    assert a is b
+    hb._bridge = None
+
+
+@respx.mock
+async def test_singleton_history_persists_across_submits() -> None:
+    respx.post("http://127.0.0.1:8642/v1/chat/completions").mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "first answer"}}]},
+            ),
+            httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "second answer"}}]},
+            ),
+        ]
+    )
+    hb._bridge = None  # reset for test isolation
+    bridge = get_bridge()
+    await bridge.submit("hello", chat_id="chat-s")
+    await bridge.submit("yes", chat_id="chat-s")
+    assert "hello" in respx.calls[1].request.content.decode()
+    hb._bridge = None
 
 
 @respx.mock

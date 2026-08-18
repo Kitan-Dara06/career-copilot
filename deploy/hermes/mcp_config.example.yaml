@@ -24,5 +24,8 @@ mcp_servers:
     tools:
       include:
         - career.profile.get
+        - career.papers.search
+        - career.professors.search
+        - career.jobs.search
       resources: false
       prompts: false
