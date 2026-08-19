@@ -1,3 +1,4 @@
+
 # Hermes Harness Integration — Comprehensive Plan
 
 ## 0. Scope and positioning
@@ -140,6 +141,16 @@ Specific modules:
 
 ## 4. Memory design
 
+> **Verified correction (live): the only channel that reliably reaches Hermes
+> is its native memory (`~/.hermes/memories/USER.md`), not the system prompt.**
+> The Hermes API server composes its own ~11k-token system prompt from
+> config/SOUL.md/memory and **ignores a `system` message sent inside a
+> chat-completions request** (proven empirically with a probe prompt).
+>
+> So the user profile is **seeded once into `USER.md` from the project YAML**, and
+> `career.profile.get` remains the canonical, up-to-date source for deep
+> lookups. See §26 for full verified facts.
+
 ### Three levels, kept intact
 
 | Level | Owner | Storage | Lifetime | Examples |
@@ -148,13 +159,13 @@ Specific modules:
 | Short-term | Memory layer | PostgreSQL | 7 days default | Today’s research thread, last request |
 | Long-term | Memory layer | PostgreSQL + Qdrant | Reviewed | User preferences, recurring patterns |
 
-Additionally, a new **Hermes memory layer** sits beside the existing one:
+The **Hermes memory layer** for the current single-user build is deliberately light:
 
-- `agent_short_term` — per-conversation notes, scoped by chat id and session id
-- `agent_memories` — durable facts observed by Hermes with provenance and confidence
-- `conversation_sessions` — completion records, tool traces, and final outputs
+- `~/.hermes/memories/USER.md` — the user model, **seeded from the project YAML** (research interests, keywords, skill clusters, facts). This is what the API server actually loads.
+- Conversation history (per-chat, bounded) — tracked by the Hermes bridge, because the API server is stateless.
+- `agent_short_term` / `agent_memories` / `conversation_sessions` tables — **optional / future**. Not needed until multi-user or cross-session recall matters.
 
-Important: agent memory is **retrievable context only**. It is never the source of truth. Career Copilot memory namespaces and PostgreSQL tables remain authoritative.
+Important: agent memory is **retrievable context only**. It is never the source of truth. Career Copilot memory namespaces, PostgreSQL tables, and the project YAML remain authoritative.
 
 ### What Hermes can write
 
@@ -403,7 +414,7 @@ Rules:
 - Persona influences wording only — never ranking, never canonical data
 - Persona is session-scoped by default; persistent personas are opt-in
 - Career Copilot saves the active persona in the conversation session record
-- The agent must pass a `system_prompt` containing the persona description; persona switching is a single tool call
+- Persona lives in Hermes's `SOUL.md` (loaded into its self-built prompt). Persona switching swaps/switches the `SOUL.md` content and reloads the gateway — the API server ignores a `system` message, so it cannot carry a persona (see §26-A)
 
 ## 14. Cost and rate limits
 
@@ -613,14 +624,18 @@ The report is appended to `benchmarks/hermes_eval_<date>.md`.
 
 ## 22. Quick wins for the first day
 
-1. Install Hermes Agent separately via the official installer or git clone; verify `from run_agent import AIAgent`.
-2. Confirm `agent.chat()` and `run_conversation()` work with `quiet_mode=True` and dangerous toolsets disabled.
-3. Add a `backbone/mcp/` skeleton with one read-only tool, `career.profile.get`.
-4. Wire Hermes to the MCP server in `~/.hermes/config.yaml` with a `tools.include` allowlist.
-5. Confirm Hermes can call `career.profile.get` and return its result.
-6. Add a chat-allowlist stress test before touching Telegram.
+**Status: all shipped (Phase 1 complete).** The original first-day steps and their outcomes:
 
-These six steps establish the contract and unblock phase 2.
+1. Install Hermes Agent via the official installer; verified `from run_agent import AIAgent`. — done
+2. Confirmed `agent.chat()` / `run_conversation()` with `quiet_mode=True` and dangerous toolsets disabled. — done
+3. `backbone/mcp/` with read-only tools (`career.profile.get`, `career.papers.search`, `career.professors.search`, `career.jobs.search`). — done
+4. Wired Hermes → MCP via `~/.hermes/config.yaml` `tools.include` allowlist. — done
+5. Confirmed Hermes can call the tools and return results. — done (verified live)
+6. Chat-allowlist enforced on every Hermes entry point. — done
+
+Additional shipped: auto-routing (plain text → Hermes), `/ask`, `/cancel`, `/new`, professor discovery
+(CSRankings), Postgres FTS search, OTel span on bridge calls, inline async briefs (RabbitMQ bypassed),
+and `USER.md` memory seeding (see §26).
 
 ## 23. Summary
 
@@ -711,8 +726,8 @@ Keep total tokens under 8k. Compact the transcript when it exceeds 3k. Keep the 
 The agent will scrape careers pages, GitHub issues, and arXiv abstracts. Any of them can contain instructions aimed at the model. Add three small guards:
 
 - A `untrusted_content` tag on every tool result
-- A hard rule in the system prompt that tool results are data, not instructions
-- Strip obvious instruction-like patterns from scraped pages before sending
+- A persistent hard rule in Hermes's `SOUL.md` that tool results are data, not instructions (a one-off `system` message is a no-op — see §26-A)
+- Strip obvious instruction-like patterns from scraped pages in the MCP policy layer before sending
 
 This is enough for a single-user system. Extensive guardrails are not needed.
 
@@ -982,5 +997,56 @@ The earlier version of this plan focused mostly on runtime wiring. The 23 additi
 - Five deterministic baselines for honest evaluation
 - Degraded operation for every external dependency
 - A test environment that survives CI
+
+---
+
+## 26. Verified integration facts and corrections
+
+Findings from live testing that shaped the implementation. These correct
+earlier assumptions in this document.
+
+### A. The Hermes API server ignores a `system` message
+
+**Verified:** a chat-completions request with `{"role":"system", "content":"Reply with exactly: SYSTEM-PROMPT-OK"}`
+was answered with "Hello! How can I help you today?". Hermes builds its own
+~11k-token system prompt from config/SOUL.md/memory and overrides any `system`
+message we send.
+
+**Consequence:** system-prompt injection from the bridge is a **no-op**. The only
+channel that reliably reaches Hermes's self-built prompt is its **native memory**
+(`~/.hermes/memories/USER.md`). The profile is seeded there once from the project
+YAML; deep lookups use `career.profile.get`.
+
+### B. RabbitMQ/Celery is fragile for a single-user brief queue
+
+**Verified:** `/prof` enqueued briefs to Celery, but the configured `RABBITMQ_URL`
+had an unresolvable host, so tasks sat in Celery's retry buffer and were never
+processed. `python -m career_copilot worker` is the scheduled-jobs poller, not a
+Celery worker — a silent mismatch.
+
+**Consequence:** briefs run **inline** in the bot as an `asyncio` task
+(`generate_brief_and_send_async`). The Celery task still wraps it for future
+cloud/Modal use, but single-user local setups need no broker.
+
+### C. Phase 1 shipped status
+
+- One Telegram bot; Hermes is an internal runtime (no Hermes messaging).
+- Auto-routing: plain text → Hermes; `/ask`, `/cancel`, `/new`.
+- MCP server: `career.profile.get`, `career.papers.search` (arXiv, relevance-ranked),
+  `career.professors.search` (watchlist via Postgres FTS + CSRankings discovery),
+  `career.jobs.search` (Postgres FTS + region).
+- Memory: `USER.md` seeded from YAML; bridge keeps bounded per-chat history.
+- Briefs: inline async (no broker).
+- Tests: 20+ passing (adapters, bridge, agent).
+
+### D. Remaining work
+
+- **Phase 2** — planning workspace + artifacts (§5, §24.8), decision lifecycle (§9, §24.9),
+  write-tool gating (§9), evidence provenance everywhere (§24.6).
+- **Phase 3** — scheduling adapter, notification inbox (§24.15), proactive limits (§24.16).
+- **Phase 4** — delegation, parallel calls, baseline evaluation (§24.20).
+- **Phase 5** — voice, personality (§12, §13).
+- Cross-cutting — user-visible memory controls (§24.10), undo/history (§24.11),
+  freshness windows (§24.7), `prompt_runs.output` truncation (§24.18).
 
 The additions are intentionally small. Each is justified by something the platform already needs. The harness is no longer wiring. It is the operating system for your career.

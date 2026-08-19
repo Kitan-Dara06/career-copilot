@@ -6,6 +6,8 @@ structure. Adapters do not perform writes and do not leak secrets.
 
 from __future__ import annotations
 
+import hashlib
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote_plus
 from xml.etree import ElementTree
@@ -151,12 +153,15 @@ def load_profile() -> dict[str, Any]:
     Sources:
         - data/user_profile.yaml  (research interests, keywords, preferences)
         - data/user_skills.yaml   (14 skill clusters with weights)
+
+    Includes a ``provenance`` block (source files, retrieval timestamp, and a
+    content hash) so consumers can cite the source and detect staleness.
     """
     profile = _load_yaml("user_profile.yaml")
     skills_raw = _load_yaml("user_skills.yaml")
     skills = skills_raw.get("skills", {}) or {}
 
-    return {
+    body = {
         "research_interests": (profile.get("research_interests") or "").strip(),
         "keywords": profile.get("keywords") or [],
         "arxiv_categories": profile.get("arxiv_categories") or [],
@@ -164,12 +169,19 @@ def load_profile() -> dict[str, Any]:
         "skill_clusters": [
             {
                 "name": name,
-                "skills": body.get("skills") or [],
-                "weight": body.get("weight", 1.0),
+                "skills": cluster.get("skills") or [],
+                "weight": cluster.get("weight", 1.0),
             }
-            for name, body in skills.items()
+            for name, cluster in skills.items()
         ],
     }
+    body["provenance"] = {
+        "sources": ["data/user_profile.yaml", "data/user_skills.yaml"],
+        "retrieved_at": datetime.now(UTC).isoformat(),
+        # Content hash for staleness detection: recompute against the files.
+        "version_key": hashlib.sha256(str(body).encode("utf-8")).hexdigest()[:16],
+    }
+    return body
 
 
 async def search_papers(query: str, limit: int = 5) -> list[dict[str, Any]]:

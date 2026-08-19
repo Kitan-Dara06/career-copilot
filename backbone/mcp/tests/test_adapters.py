@@ -36,6 +36,14 @@ def test_load_profile_has_keywords() -> None:
     assert isinstance(profile["keywords"], list)
 
 
+def test_load_profile_has_provenance() -> None:
+    profile = load_profile()
+    prov = profile["provenance"]
+    assert "data/user_profile.yaml" in prov["sources"]
+    assert prov["retrieved_at"]
+    assert len(prov["version_key"]) == 16
+
+
 # ── Papers (arXiv, mocked HTTP) ──
 
 
