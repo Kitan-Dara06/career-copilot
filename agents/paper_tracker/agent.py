@@ -945,7 +945,7 @@ class PaperTrackerAgent:
                 SearchInput(query=f"{name} professor homepage university", max_results=3),
             )
             homepage = tavily_out.results[0].url if tavily_out.results else ""
-            affiliation = _extract_affiliation(tavily_out.results)
+            affiliation = await _extract_affiliation(tavily_out.results)
             logger.info("watch_add_tavily_done", name=name, has_homepage=bool(homepage))
         except Exception as exc:
             logger.warning("watch_add_tavily_failed", name=name, error=str(exc))
@@ -1910,57 +1910,41 @@ def _cosine(a: list[float], b: list[float]) -> float:
     return dot / (mag_a * mag_b)
 
 
-def _extract_affiliation(results: list[Any]) -> str:
-    """Extract a university/lab name from Tavily search results."""
-    import re
+async def _extract_affiliation(results: list[Any]) -> str:
+    """Match Tavily result content against known institution names.
 
-    if not results:
+    The previous approach sliced a sentence around keywords like
+    "university"/"research" out of raw scraped page text, which returned
+    garbage for profile pages (e.g. "Home Bio ## Follow Us ..."). Matching
+    against the CSRankings institution list returns a clean canonical name
+    (e.g. "McGill University") or an empty string.
+    """
+    institutions = await _cached_institutions()
+    if not institutions:
         return ""
+    # Longest names first so "University of British Columbia" wins over
+    # "British Columbia" when both are substrings.
+    names = sorted(institutions, key=len, reverse=True)
     for r in results[:3]:
-        content = r.content.lower()
-        for keyword in ["university", "institute", "lab", "college", "research"]:
-            idx = content.find(keyword)
-            if idx >= 0:
-                # Find sentence boundaries around the keyword
-                # Look backwards for sentence start
-                sent_start = idx
-                while sent_start > 0:
-                    if content[sent_start - 1] == "." and sent_start < len(content) and content[sent_start] == " ":
-                        break
-                    sent_start -= 1
-                # Skip leading space after period
-                if sent_start > 0 and content[sent_start] == " ":
-                    sent_start += 1
+        content = (r.content or "").lower()
+        for name in names:
+            if name.lower() in content:
+                return name
+    return ""
 
-                # Look forwards for sentence end (period + space or end of content)
-                sent_end = idx
-                while sent_end < len(content):
-                    if content[sent_end] == ".":
-                        if sent_end + 1 >= len(content) or content[sent_end + 1] == " ":
-                            sent_end += 1  # include the period
-                            break
-                    sent_end += 1
 
-                snippet = r.content[sent_start:sent_end].strip()
+_institutions_cache: dict[str, Any] | None = None
 
-                # Truncate to 120 chars at word boundary
-                if len(snippet) > 120:
-                    truncated = snippet[:120]
-                    last_space = truncated.rfind(" ")
-                    if last_space > 0:
-                        truncated = truncated[:last_space]
-                    snippet = truncated.rstrip()
 
-                # Remove emoji
-                snippet = re.sub(
-                    r"[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF"
-                    r"\U0001F680-\U0001F6FF\U0001F1E0-\U0001F1FF"
-                    r"\U00002702-\U000027B0\U0000FE0F"
-                    r"\U0001F900-\U0001F9FF\U0001FA00-\U0001FA6F"
-                    r"\U0001FA70-\U0001FAFF]+",
-                    "",
-                    snippet,
-                ).strip()
+async def _cached_institutions() -> dict[str, Any]:
+    """Load the CSRankings institution list once per process."""
+    global _institutions_cache
+    if _institutions_cache is not None:
+        return _institutions_cache
+    try:
+        from backbone.tools.csrankings import _load_institutions
 
-                return snippet
-    return results[0].title if results else ""
+        _institutions_cache = await _load_institutions()
+    except Exception:
+        _institutions_cache = {}
+    return _institutions_cache
