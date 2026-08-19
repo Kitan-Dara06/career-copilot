@@ -32,37 +32,24 @@ _SYSTEM_PROMPT: str | None = None
 
 
 def _default_system_prompt() -> str:
-    """Build the system prompt with the user's canonical profile.
+    """Build a small pointer prompt for Hermes.
 
-    Hermes's API server is stateless and only sees the current message +
-    history, so without this it has no idea who the user is and will ask
-    "what are your research interests?" instead of using career.profile.
-    Loaded once per process (cheap YAML read) and reused for every turn.
+    The user's canonical profile lives in the project YAML and is exposed to
+    Hermes via the ``career.profile.get`` MCP tool. Rather than duplicating the
+    data into the system prompt (bloat + drift when the YAML changes), we keep
+    the prompt tiny and instruct Hermes to fetch the profile when relevant.
     """
     global _SYSTEM_PROMPT
     if _SYSTEM_PROMPT is not None:
         return _SYSTEM_PROMPT
-    try:
-        from backbone.mcp.adapters import load_profile
-
-        profile = load_profile()
-        keywords = ", ".join(profile.get("keywords") or [])[:400]
-        clusters = ", ".join(
-            c["name"] for c in (profile.get("skill_clusters") or [])[:6]
-        )
-        _SYSTEM_PROMPT = (
-            "You are Career Copilot's conversational assistant for a CS student. "
-            "The user's research interests: "
-            + (keywords or "not set")
-            + ". Core skill clusters: "
-            + (clusters or "not set")
-            + ". "
-            "Use the career.* tools (profile, papers, professors, jobs) when relevant. "
-            "To compare a professor with the user's interests, call career.professors.search "
-            "then career.profile.get. Keep replies concise for Telegram."
-        )
-    except Exception:
-        _SYSTEM_PROMPT = ""
+    _SYSTEM_PROMPT = (
+        "You are Career Copilot's conversational assistant for a CS student. "
+        "The user's canonical research interests and skills are available via the "
+        "career.profile.get tool. Before answering questions about professor fit, "
+        "paper relevance, research direction, or career planning, call career.profile.get "
+        "and ground your answer in its data. Use career.papers/professors/jobs.search "
+        "when the user asks for papers, professors, or jobs. Keep replies concise."
+    )
     return _SYSTEM_PROMPT
 
 
