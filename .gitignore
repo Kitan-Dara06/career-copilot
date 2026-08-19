@@ -53,3 +53,4 @@ dmypy.json
 azure-creds.json
 deploy/azure/params.json
 deploy/azure/deploy.sh
+note.json

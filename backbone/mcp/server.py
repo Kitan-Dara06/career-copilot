@@ -21,6 +21,17 @@ from .adapters import (
     search_professors,
     should_discover,
 )
+from .planning import (
+    get_active_workspace_id,
+    get_summary,
+    get_workspace,
+    list_artifacts,
+    list_decisions,
+    list_goals,
+    list_notes,
+    list_tasks,
+    list_workspaces,
+)
 from .policy import apply_policy
 
 mcp = FastMCP("career-copilot")
@@ -99,6 +110,134 @@ async def career_jobs_search(
     flag, application URL, and posted date. Read-only.
     """
     return apply_policy(await search_jobs(query, region, limit))
+
+
+# ── Planning read tools (Phase 2, §5) ────────────────────────────
+
+
+@mcp.tool(name="career.planning.list_workspaces")
+async def career_planning_list_workspaces() -> dict:
+    """List all planning workspaces for the owner.
+
+    Returns name, intake year, target degree, and status for each.
+    Read-only.
+    """
+    return apply_policy(await list_workspaces())
+
+
+@mcp.tool(name="career.planning.get_workspace")
+async def career_planning_get_workspace(workspace_id: int) -> dict:
+    """Return one workspace by id, or an error dict if not found.
+
+    Read-only.
+    """
+    ws = await get_workspace(workspace_id)
+    if not ws:
+        return {"error": f"workspace {workspace_id} not found"}
+    return apply_policy(ws)
+
+
+@mcp.tool(name="career.planning.list_goals")
+async def career_planning_list_goals(
+    workspace_id: int,
+    status: str | None = None,
+) -> dict:
+    """List goals in a workspace, optionally filtered by status.
+
+    Args:
+        workspace_id: Required workspace id.
+        status: Optional filter ('open', 'done', 'dropped').
+
+    Read-only.
+    """
+    return apply_policy(await list_goals(workspace_id, status))
+
+
+@mcp.tool(name="career.planning.list_tasks")
+async def career_planning_list_tasks(
+    workspace_id: int,
+    status: str | None = None,
+    due_before: str | None = None,
+) -> dict:
+    """List tasks in a workspace, optionally filtered.
+
+    Args:
+        workspace_id: Required workspace id.
+        status: Optional filter ('todo', 'doing', 'blocked', 'done').
+        due_before: Optional ISO date (YYYY-MM-DD) — only tasks due on or before.
+
+    Read-only.
+    """
+    return apply_policy(await list_tasks(workspace_id, status, due_before))
+
+
+@mcp.tool(name="career.planning.list_decisions")
+async def career_planning_list_decisions(
+    workspace_id: int,
+    status: str | None = None,
+) -> dict:
+    """List decisions in a workspace, optionally filtered.
+
+    Args:
+        workspace_id: Required workspace id.
+        status: Optional filter ('idea', 'recommendation', 'proposed',
+            'confirmed', 'superseded').
+
+    Returns decisions with rationale, evidence, and lifecycle status.
+    Read-only.
+    """
+    return apply_policy(await list_decisions(workspace_id, status))
+
+
+@mcp.tool(name="career.planning.list_notes")
+async def career_planning_list_notes(workspace_id: int) -> dict:
+    """List notes in a workspace, pinned first.
+
+    Read-only.
+    """
+    return apply_policy(await list_notes(workspace_id))
+
+
+@mcp.tool(name="career.planning.list_artifacts")
+async def career_planning_list_artifacts(
+    workspace_id: int,
+    artifact_type: str | None = None,
+) -> dict:
+    """List artifacts in a workspace, optionally filtered by type.
+
+    Args:
+        workspace_id: Required workspace id.
+        artifact_type: Optional filter (e.g. 'reading_plan',
+            'school_application', 'school_comparison').
+
+    Read-only.
+    """
+    return apply_policy(await list_artifacts(workspace_id, artifact_type))
+
+
+@mcp.tool(name="career.planning.get_summary")
+async def career_planning_get_summary(
+    chat_id: str,
+    workspace_id: int | None = None,
+) -> dict:
+    """Get a compact workspace summary for the active or specified workspace.
+
+    This is the session-bootstrap payload that the bridge prepends to
+    the first user message of a new chat. Use ``chat_id`` to look up the
+    active workspace for that chat; pass ``workspace_id`` to override.
+
+    Args:
+        chat_id: The Telegram chat id (so we can find the active workspace).
+        workspace_id: Optional explicit workspace id (skips the active
+            lookup).
+
+    Returns counts and titles of open goals, overdue tasks, and
+    confirmed decisions. Read-only.
+    """
+    wid = workspace_id if workspace_id is not None else await get_active_workspace_id(chat_id)
+    if wid is None:
+        return {"error": "no active workspace for chat_id and no workspace_id given"}
+    return apply_policy(await get_summary(wid))
 
 
 if __name__ == "__main__":

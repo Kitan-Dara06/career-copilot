@@ -14,12 +14,14 @@ from sqlalchemy import (
     TIMESTAMP,
     BigInteger,
     Boolean,
+    Date,
     ForeignKey,
     Index,
     Integer,
     Numeric,
     String,
     Text,
+    UniqueConstraint,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -451,3 +453,129 @@ class ContributionRepo(Base):
     added_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("now()"), nullable=False)
 
     __table_args__ = (Index("idx_cf_repo_name", "github_full_name"),)
+
+
+# ── Planning workspace (Phase 2) ────────────────────────────────
+
+
+class PlanningWorkspace(Base):
+    """Root planning container (e.g. "Master's 2027")."""
+
+    __tablename__ = "planning_workspaces"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    intake_year: Mapped[int] = mapped_column(Integer, nullable=False)
+    target_degree: Mapped[str] = mapped_column(String(50), nullable=False)
+    owner: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("now()"), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("owner", "name", name="uq_planning_workspace_owner_name"),
+    )
+
+
+class PlanningGoal(Base):
+    """Strategic aim inside a workspace."""
+
+    __tablename__ = "planning_goals"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("planning_workspaces.id", ondelete="CASCADE"), nullable=False)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    parent_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("planning_goals.id"))
+    priority: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="open")
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("now()"), nullable=False)
+
+
+class PlanningTask(Base):
+    """Actionable item under a goal."""
+
+    __tablename__ = "planning_tasks"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    goal_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("planning_goals.id", ondelete="CASCADE"), nullable=False)
+    workspace_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("planning_workspaces.id", ondelete="CASCADE"), nullable=False)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    due_date: Mapped[datetime | None] = mapped_column(Date)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="todo")
+    blocked_by_task_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("planning_tasks.id"))
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("now()"), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("now()"), nullable=False)
+
+
+class PlanningDecision(Base):
+    """Recorded choice with evidence and lifecycle status."""
+
+    __tablename__ = "planning_decisions"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("planning_workspaces.id", ondelete="CASCADE"), nullable=False)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    rationale: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="idea")
+    evidence: Mapped[dict | None] = mapped_column(JSONB)
+    decided_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("now()"), nullable=False)
+    superseded_by_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("planning_decisions.id"))
+
+
+class PlanningNote(Base):
+    """Free-form prose under a workspace."""
+
+    __tablename__ = "planning_notes"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("planning_workspaces.id", ondelete="CASCADE"), nullable=False)
+    kind: Mapped[str] = mapped_column(String(50), nullable=False, default="note")
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    pinned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("now()"), nullable=False)
+
+
+class PlanningArtifact(Base):
+    """Durable output (reading plan, school comparison, brief)."""
+
+    __tablename__ = "planning_artifacts"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("planning_workspaces.id", ondelete="CASCADE"), nullable=False)
+    type: Mapped[str] = mapped_column(String(50), nullable=False)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    body: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    evidence: Mapped[dict | None] = mapped_column(JSONB)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("now()"), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("now()"), nullable=False)
+
+
+class PlanningState(Base):
+    """Active workspace pointer per chat (one row per chat)."""
+
+    __tablename__ = "planning_state"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    chat_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    active_workspace_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("planning_workspaces.id"))
+    last_active_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("now()"), nullable=False)
+
+
+class PlanningProposal(Base):
+    """Pending write awaiting inline-button confirmation."""
+
+    __tablename__ = "planning_proposals"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    chat_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    workspace_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("planning_workspaces.id", ondelete="CASCADE"))
+    tool: Mapped[str] = mapped_column(String(100), nullable=False)
+    args: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    risk_level: Mapped[str] = mapped_column(String(10), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("now()"), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
