@@ -151,89 +151,195 @@ Specific modules:
 > `career.profile.get` remains the canonical, up-to-date source for deep
 > lookups. See §26 for full verified facts.
 
-### Three levels, kept intact
+### Memory policy (decided)
 
-| Level | Owner | Storage | Lifetime | Examples |
-|---|---|---|---|---|
-| Working | Hermes runtime | In-memory dict | Single conversation | "the third paper", active filters |
-| Short-term | Memory layer | PostgreSQL | 7 days default | Today’s research thread, last request |
-| Long-term | Memory layer | PostgreSQL + Qdrant | Reviewed | User preferences, recurring patterns |
+**Fact rule:** anything the user might query later lives in **Postgres via MCP tools**, never in Hermes memory.
 
-The **Hermes memory layer** for the current single-user build is deliberately light:
+**Style rule:** ephemeral prose observations (preferences, trends) live in Hermes memory.
 
-- `~/.hermes/memories/USER.md` — the user model, **seeded from the project YAML** (research interests, keywords, skill clusters, facts). This is what the API server actually loads.
-- Conversation history (per-chat, bounded) — tracked by the Hermes bridge, because the API server is stateless.
-- `agent_short_term` / `agent_memories` / `conversation_sessions` tables — **optional / future**. Not needed until multi-user or cross-session recall matters.
+**Re-seed rule:** a single script regenerates `USER.md` from the project YAML. It never includes planning data, decisions, or tasks — those are Postgres-only and re-seeding would clobber canonical state.
 
-Important: agent memory is **retrievable context only**. It is never the source of truth. Career Copilot memory namespaces, PostgreSQL tables, and the project YAML remain authoritative.
+### Memory matrix
 
-### What Hermes can write
+| Fact kind | Storage | Writer | Refresh source |
+|---|---|---|---|
+| Research interests, keywords, skill clusters, facts | `USER.md` (seeded) + project YAML | Manual YAML edit + `scripts/seed_hermes_memory.py` | Run the seed script after YAML changes |
+| Active workspace pointer (per user/chat) | Postgres `planning_state` (single row) | Bridge + user (`/workspace use <id>`) | Updated whenever a new workspace becomes active |
+| Workspaces, goals, tasks, decisions, school applications, artifacts | Postgres | `career.planning.*` MCP tools only | Append-only + status transitions |
+| Saved papers / jobs / professors | Postgres (existing) | Existing tools | Same as today |
+| Conversation continuity across sessions | **Active workspace summary, prepended on first message** | Bridge reads via `career.planning.get_summary` | Each session start |
+| In-session history (clarifications, follow-ups) | Per-chat in the bridge (10 messages) | Bridge | In-memory only; lost on restart |
+| Style preferences ("prefers Markdown") | Hermes memory (`USER.md` prose) | Hermes native | Hermes owns |
+| Trending interests ("asked about RAG 3 times") | Hermes memory | Hermes native | Hermes owns |
 
+### Session bootstrap protocol
+
+```
+New chat
+  ├─→ bridge reads planning_state for this chat (active workspace id)
+  ├─→ bridge calls career.planning.get_summary(workspace_id)
+  ├─→ first user message is sent with system-prompt-injection-like pre-amble:
+  │     "Active workspace: <name>. Open goals: <n>. Overdue tasks: <n>.
+  │      Latest decisions: <list>. Last activity: <iso>."
+  ├─→ (Note: API server ignores a `system` message, so this preamble is sent
+  │       as the FIRST USER MESSAGE instead — same effect, different channel.)
+  └─→ normal Hermes turn proceeds
+```
+
+This is the durable session continuity. There is no need to write conversation logs to Postgres.
+
+### What Hermes can write (autonomously)
+
+Hermes native memory is allowed for:
 - Conversation-level notes ("the user prefers temporal abstractions")
 - Inferred patterns ("the user often selects implementable IR papers")
-- Draft decisions ("maybe use the no-GRE route at McGill")
+- Ephemeral style observations
+
+Hermes is **forbidden** from writing to planning tables — those only have MCP-tool paths and the credentials don't reach the model.
 
 ### What requires explicit tools
 
-- Profile updates. Use `profile.propose_update`, not direct memory writes.
-- Goal and task CRUD. Use planning tools.
-- Schedule changes. Use the scheduler adapter.
-- Anything touching `professors`, `jobs`, `companies`, `saved_jobs`, `feedback_log`.
+All of these go through `career.planning.*` (or existing) MCP tools:
+- Profile updates. `career.profile.get` is read-only for v1; manual YAML edit + re-seed for writes.
+- Goal and task CRUD. `career.planning.add_goal`, `add_task`, `update_task_status`.
+- Decision CRUD. `career.planning.record_decision`, `supersede_decision`.
+- Workspace lifecycle. `career.planning.create_workspace`, `switch_workspace`, `archive_workspace`.
+- Anything touching `professors`, `jobs`, `companies`, `saved_jobs`, `feedback_log` — existing tools.
+
+### Refresh / reconcile
+
+- `scripts/seed_hermes_memory.py` — idempotent, run after editing YAML.
+  - Writes only research interests + keywords + skill clusters + facts.
+  - Never overwrites planning data, decisions, or tasks.
+  - Shows a `git diff` of the change so the user sees what moved.
+- Auto-run on YAML change is **not** wired — manual keeps the user in control of when Hermes re-reads the canonical source.
 
 ### Confidence and provenance
 
-Every `agent_memory` row carries:
+Postgres facts that come from external sources carry a `provenance` block (already implemented for `career.profile.get`):
+- `sources` — list of files / URLs
+- `retrieved_at` — ISO timestamp
+- `version_key` — short content hash for staleness detection
 
-- `source` — tool name or conversation reference
-- `confidence` — 0.0–1.0
-- `created_at` and `last_confirmed_at`
-- `expires_at` — optional
-- `scope` — `chat`, `user`, `workspace`
+Decisions carry `status` + `evidence` (same shape). Confidence and freshness windows (per §24.7) are added when the schema lands in Phase 2.
 
-Memory proposals that drop below 0.5 confidence or exceed their expiry are summarized for the user, never silently overwritten.
+### Deferred (explicitly out of §4)
+
+- `agent_short_term` / `agent_memories` / `conversation_sessions` DB tables — not needed. Conversation continuity is the workspace summary, not a transcript log.
+- Full-text session search across past runs — only if the workspace-summary approach proves insufficient.
 
 ## 5. Planning workspace — phase 2
 
-A new planning domain is the highest-leverage feature. Schema:
+This is the highest-leverage single-user feature. Below is the **decided** shape — entities, MCP tools, write-path, and acceptance queries.
 
-- `planning_workspaces` — id, name, intake year, target degree, owner, status
-- `planning_goals` — workspace_id, title, description, parent_id, priority, status
-- `planning_tasks` — goal_id, title, description, due_date, assignee, status, blocked_by
-- `planning_decisions` — workspace_id, title, rationale, status, decided_at
-- `school_applications` — workspace_id, school, program, deadline, status, notes
-- `application_requirements` — application_id, kind, status, notes
-- `planning_notes` — workspace_id, kind, body, pinned, created_at
+### Entities (minimal v1)
 
-Natural-language interactions:
+| Table | Purpose | Key fields |
+|---|---|---|
+| `planning_workspaces` | Root container (e.g. "Master's 2027") | `id, name, intake_year, target_degree, owner, status (active/archived), created_at` |
+| `planning_goals` | Strategic aims inside a workspace | `id, workspace_id, title, description, parent_id, priority, status (open/done/dropped), created_at` |
+| `planning_tasks` | Actionable items | `id, goal_id, title, description, due_date, status (todo/doing/blocked/done), blocked_by_task_id, created_at, updated_at` |
+| `planning_decisions` | Recorded choices with evidence | `id, workspace_id, title, rationale, status (idea/recommendation/proposed/confirmed/superseded), evidence (jsonb), decided_at, superseded_by_id` |
+| `planning_notes` | Free-form prose under a workspace | `id, workspace_id, kind, body, pinned, created_at` |
+| `planning_artifacts` | Durable outputs (reading plan, school comparison, brief) | `id, workspace_id, type, title, body (jsonb), evidence (jsonb), version, status (draft/final), created_at, updated_at` |
+| `planning_state` | **One row per chat/user** — active workspace pointer | `id, chat_id, active_workspace_id, last_active_at` |
 
-> "I want to start planning my Master's application for 2027."
+**Deferred:** `school_applications` and `application_requirements` are folded into `planning_artifacts` (type `school_application`) for v1 — keeps the schema small.
 
-This creates a workspace with draft goals and suggested tasks.
+### Read-path MCP tools (low risk, no confirm)
 
-> "Compare Waterloo and Alberta for my profile."
+```text
+career.planning.get_summary        workspace summary (the session-bootstrap payload)
+career.planning.list_workspaces
+career.planning.list_goals        filter by workspace, status
+career.planning.list_tasks        filter by workspace, status, due_before
+career.planning.list_decisions   filter by workspace, status
+career.planning.list_notes
+career.planning.list_artifacts
+career.planning.get_workspace
+career.planning.get_artifact
+```
 
-This returns a structured comparison using profile data, school tiers, and deadlines.
+All read tools return a `provenance` block for their data sources (same shape as `career.profile.get`).
 
-> "I may not be able to afford the GRE this year. Update the plan."
+### Write-path MCP tools (gated)
 
-This proposes several decisions and waits for confirmation.
+| Tool | Risk | Confirm channel |
+|---|---|---|
+| `career.planning.create_workspace` | medium | Inline button (yes/edit/skip) |
+| `career.planning.add_goal` | medium | Inline button (yes/edit/skip) |
+| `career.planning.add_task` | medium | Inline button (yes/edit/skip) |
+| `career.planning.record_decision` | high | Inline button — requires explicit approve |
+| `career.planning.supersede_decision` | high | Inline button + review |
+| `career.planning.update_task_status` | low | Auto |
+| `career.planning.add_note` | low | Auto |
+| `career.planning.switch_workspace` | medium | Inline button |
+| `career.planning.archive_workspace` | high | Inline button + review |
 
-> "What am I behind on?"
+**Write protocol (decided):**
 
-This returns tasks past due or blocked.
+1. Hermes proposes → tool returns `pending_proposal_id` instead of writing
+2. Bot shows the proposal as a Telegram inline-button row `[Approve] [Edit] [Skip]`
+3. Callback data carries the `pending_proposal_id`
+4. On Approve: tool executes the actual write
+5. On Skip: drop the proposal (logged)
+6. On Edit: start a new proposal with the user's edit
 
-> "Show the evidence for classifying Waterloo as a reach school."
+Pending proposals live in a Postgres `planning_proposals` table (one row per pending write) with a 30-minute TTL.
 
-This surfaces the rationale and links to the source memory.
+**Hermes writes autonomously:** forbidden for everything in the table above. The only path to these tables is through MCP tools, which require user confirmation. This is the **fact rule** from §4 enforced by tool gating, not by hope.
 
-Confirmation policy:
+### Session bootstrap (replaces chat history)
 
-- Creating a workspace — confirm
-- Adding a school — confirm
-- Recording a decision — confirm
-- Updating task status — auto
-- Adding a note — auto
-- Deleting anything — double confirmation
+When a new chat starts (or `/new` is sent), the bridge:
+
+```text
+1. Read planning_state for chat_id → active_workspace_id
+2. Call career.planning.get_summary(workspace_id) → compact summary
+3. Prepend the summary to the FIRST USER MESSAGE (not system — API server ignores system)
+   Format: "[CONTEXT] Active workspace: Master's 2027. Open goals: 3. Overdue tasks: 2.
+             Latest decisions: 'skip GRE this year' (2026-08-19). Last activity: 2 days ago.
+             Your message: <user text>"
+4. Continue normal Hermes turns.
+```
+
+This is the durable cross-session context. No conversation logs needed.
+
+### Acceptance queries (must all work)
+
+| Query | Result |
+|---|---|
+| "I want to start planning my Master's application for 2027." | Creates workspace with seeded goals from `user_profile.yaml` (Canada/EU schools, GPA tier) |
+| "Compare Waterloo and Alberta for my profile." | Returns a `school_comparison` artifact + writes `planning_artifacts` rows for both |
+| "I may not be able to afford the GRE this year. Update the plan." | Proposes a decision; awaits inline-button confirmation |
+| "What am I behind on?" | Lists overdue `todo/blocked` tasks ranked by due_date |
+| "Show the evidence for classifying Waterloo as a reach school." | Surfaces the decision's `evidence` block |
+| "What's the plan?" (next session, days later) | Prepends workspace summary → Hermes answers with current state |
+
+### Seeding
+
+A `scripts/seed_workspace.py` produces a default **"Master's 2027"** workspace on first run with:
+- 4 draft goals (Research direction, Funding strategy, Documents, Professor outreach)
+- ~10 tasks seeded from the user's profile (GPA verification, GRE/TOEFL decision, etc.)
+- 1 artifact — `school_comparison` over the Canada list from `user_profile.yaml`
+
+This is a big UX win vs. blank-workspace prompts.
+
+### Migrations
+
+New migration `0005_planning_tables.py`. Follows the existing pattern in `migrations/versions/`.
+
+### Tests
+
+- Repo-layer tests for each MCP tool using the **fake-session pattern** (proven in `backbone/mcp/tests/test_adapters.py`)
+- Integration test: create workspace → add goal → propose task → confirm → list → confirm supersede decision
+- Skip-behind-existing-workspace test (unique constraint on `(owner, name)`)
+
+### Out of scope for §5 (deferred)
+
+- Notion export of artifacts (existing `notion.create_page` tool can be reused later)
+- Workspace sharing (single user only)
+- Multi-currency / multi-timezone handling
 
 ## 6. Tool registry changes
 
