@@ -31,6 +31,111 @@ def _tsvector_expr(columns: str) -> str:
     return f"to_tsvector('english', {' || '.join(parts)})"
 
 
+# Query keywords → CSRankings parent area, for scoping professor discovery.
+_AREA_KEYWORDS: dict[str, str] = {
+    "retrieval": "inforet",
+    "information retrieval": "inforet",
+    "web search": "inforet",
+    "nlp": "nlp",
+    "natural language": "nlp",
+    "language processing": "nlp",
+    "machine learning": "mlmining",
+    "deep learning": "mlmining",
+    "artificial intelligence": "ai",
+    "computer vision": "vision",
+    "vision": "vision",
+}
+
+_DEFAULT_DISCOVER_AREAS: set[str] = {"nlp", "inforet", "mlmining", "ai"}
+
+
+def should_discover(query: str) -> bool:
+    """True if the query targets NEW professors (not just the watchlist).
+
+    Heuristic: the query contains a capitalized token (likely an institution
+    or proper noun) or an area keyword. "who am I watching" → False;
+    "professors at McGill doing retrieval" → True.
+    """
+    if not query or not query.strip():
+        return False
+    if any(c.isupper() for c in query):
+        return True
+    q = query.lower()
+    return any(kw in q for kw in _AREA_KEYWORDS)
+
+
+async def discover_professors(query: str, limit: int = 10) -> list[dict[str, Any]]:
+    """Find professors from CSRankings matching an institution and/or area.
+
+    Query tokens are matched against CSRankings' institution list (e.g.
+    "McGill" → "McGill University") and area keywords ("retrieval" →
+    inforet). Results are ranked by adjusted publication count. The upstream
+    CSVs are downloaded once per process and cached.
+    """
+    from backbone.tools.csrankings import (
+        CONFERENCE_TO_PARENT,
+        _load_author_info,
+        _load_institutions,
+        _load_prof_index,
+    )
+
+    q_lower = query.lower()
+    tokens = [
+        t.strip(",.!?;:'\"()[]")
+        for t in query.split()
+        if len(t.strip(",.!?;:'\"()[]")) > 2
+    ]
+
+    areas: set[str] = set()
+    for kw, area in _AREA_KEYWORDS.items():
+        if kw in q_lower:
+            areas.add(area)
+    if not areas:
+        areas = set(_DEFAULT_DISCOVER_AREAS)
+
+    institutions = await _load_institutions()
+    inst_names = sorted(
+        (n for n in institutions if any(t.lower() in n.lower() for t in tokens)),
+        key=len,
+        reverse=True,
+    )
+
+    author_info = await _load_author_info()
+    prof_index = await _load_prof_index()
+
+    # Adjusted publication count per author, limited to hinted areas.
+    adjusted: dict[str, float] = {}
+    for row_area, name, adj in author_info["rows"]:
+        parent = CONFERENCE_TO_PARENT.get(row_area)
+        if parent is None or parent not in areas:
+            continue
+        adjusted[name] = adjusted.get(name, 0.0) + adj
+
+    matches: list[dict[str, Any]] = []
+    for prof_row in prof_index:
+        name = prof_row.get("name", "")
+        affiliation = prof_row.get("affiliation", "") or ""
+        if not name or not affiliation:
+            continue
+        if inst_names and not any(inst in affiliation for inst in inst_names):
+            continue
+        adj = adjusted.get(name, 0.0)
+        if adj <= 0:
+            continue
+        matches.append(
+            {
+                "name": name,
+                "affiliation": affiliation,
+                "homepage": prof_row.get("homepage", "") or "",
+                "source": "csrankings",
+                "adjusted_count": round(adj, 2),
+            }
+        )
+
+    matches.sort(key=lambda m: m["adjusted_count"], reverse=True)
+    return matches[: max(1, min(int(limit), 20))]
+
+
 def _load_yaml(name: str) -> dict[str, Any]:
     """Load a YAML file from the data directory, returning {} if missing."""
     path = DATA_DIR / name

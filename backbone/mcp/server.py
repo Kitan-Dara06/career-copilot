@@ -13,7 +13,14 @@ from __future__ import annotations
 
 from mcp.server.fastmcp import FastMCP
 
-from .adapters import load_profile, search_jobs, search_papers, search_professors
+from .adapters import (
+    discover_professors,
+    load_profile,
+    search_jobs,
+    search_papers,
+    search_professors,
+    should_discover,
+)
 from .policy import apply_policy
 
 mcp = FastMCP("career-copilot")
@@ -46,16 +53,33 @@ async def career_papers_search(query: str, limit: int = 5) -> dict:
 
 @mcp.tool(name="career.professors.search")
 async def career_professors_search(query: str, limit: int = 10) -> dict:
-    """Search the professor watchlist by name or affiliation.
+    """Search professors — your watchlist first, then CSRankings faculty.
+
+    Watchlist matches are tagged ``source: watchlist``. If the query names
+    an institution and/or research area (e.g. "McGill doing retrieval"),
+    CSRankings faculty matching both are returned too, tagged
+    ``source: csrankings`` and ranked by publication activity.
 
     Args:
-        query: Name or affiliation fragment (e.g. "McGill").
-        limit: Max results (1-50, default 10).
+        query: Name, affiliation, institution, and/or area (e.g. "McGill retrieval").
+        limit: Max total results (1-50, default 10).
 
-    Returns watchlist entries with name, affiliation, homepage, and
-    added date. Read-only.
+    Read-only.
     """
-    return apply_policy(await search_professors(query, limit))
+    watchlist = await search_professors(query, limit)
+    discovered: list[dict] = []
+    if should_discover(query):
+        discovered = await discover_professors(query, limit)
+
+    merged: list[dict] = [{"source": "watchlist", **p} for p in watchlist]
+    seen = {p["name"].lower() for p in merged}
+    for p in discovered:
+        if p["name"].lower() in seen:
+            continue
+        seen.add(p["name"].lower())
+        merged.append(p)
+
+    return apply_policy(merged[: max(1, min(int(limit), 50))])
 
 
 @mcp.tool(name="career.jobs.search")

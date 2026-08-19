@@ -8,10 +8,12 @@ import httpx
 import respx
 
 from backbone.mcp.adapters import (
+    discover_professors,
     load_profile,
     search_jobs,
     search_papers,
     search_professors,
+    should_discover,
 )
 from backbone.mcp.policy import apply_policy, redact
 
@@ -154,6 +156,70 @@ async def test_search_jobs_no_filters(monkeypatch: Any) -> None:
     rows = await search_jobs()
     assert len(rows) == 1
     assert rows[0]["remote_ok"] is True
+
+
+# ── Professor discovery (CSRankings, mocked loaders) ──
+
+
+def test_should_discover_heuristic() -> None:
+    assert should_discover("professors at McGill doing retrieval")
+    assert should_discover("find me retrieval professors")
+    assert not should_discover("show my watchlist")
+    assert not should_discover("")
+
+
+async def test_discover_professors_filters_institution_and_area(monkeypatch: Any) -> None:
+    import backbone.tools.csrankings as csk
+
+    async def fake_institutions() -> dict:
+        return {"McGill University": {"region": "CA", "country_code": "ca", "homepage": ""}}
+
+    async def fake_author_info() -> dict:
+        return {
+            "rows": [
+                ("sigir", "Jane McGill Prof", 5.0),   # inforet, matches hinted area
+                ("acl", "Jane McGill Prof", 2.0),     # nlp, not hinted — excluded
+                ("sigir", "Other Prof", 9.0),         # inforet but wrong institution
+            ]
+        }
+
+    async def fake_prof_index() -> list:
+        return [
+            {"name": "Jane McGill Prof", "affiliation": "McGill University", "homepage": "http://j"},
+            {"name": "Other Prof", "affiliation": "Stanford University", "homepage": "http://o"},
+        ]
+
+    monkeypatch.setattr(csk, "_load_institutions", fake_institutions)
+    monkeypatch.setattr(csk, "_load_author_info", fake_author_info)
+    monkeypatch.setattr(csk, "_load_prof_index", fake_prof_index)
+
+    rows = await discover_professors("professors at McGill doing retrieval")
+
+    assert len(rows) == 1
+    assert rows[0]["name"] == "Jane McGill Prof"
+    assert rows[0]["source"] == "csrankings"
+    assert rows[0]["adjusted_count"] == 5.0  # only the sigir/inforet row counts
+
+
+async def test_discover_professors_no_institution_returns_top_area(monkeypatch: Any) -> None:
+    import backbone.tools.csrankings as csk
+
+    async def fake_institutions() -> dict:
+        return {}
+
+    async def fake_author_info() -> dict:
+        return {"rows": [("sigir", "Top IR Prof", 12.0)]}
+
+    async def fake_prof_index() -> list:
+        return [{"name": "Top IR Prof", "affiliation": "Some University", "homepage": ""}]
+
+    monkeypatch.setattr(csk, "_load_institutions", fake_institutions)
+    monkeypatch.setattr(csk, "_load_author_info", fake_author_info)
+    monkeypatch.setattr(csk, "_load_prof_index", fake_prof_index)
+
+    rows = await discover_professors("professors doing retrieval")
+    assert len(rows) == 1
+    assert rows[0]["adjusted_count"] == 12.0
 
 
 # ── Policy ──
