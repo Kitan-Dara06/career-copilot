@@ -261,16 +261,20 @@ def wire_paper_tracker(dispatcher: Dispatcher) -> None:
 
         # Fire-and-forget to Celery: LLM generates direction/overlap/email sections
         try:
-            from career_copilot.queue import generate_professor_brief
+            import asyncio
 
-            generate_professor_brief.delay(
-                prof_name=data["prof_name"],
-                affiliation=data["affiliation"],
-                recent_papers=data["recent_papers"],
-                user_interests=data["user_interests"],
-                homepage=data.get("homepage", ""),
-                overlap_score=data.get("overlap_score", 0.0),
-                chat_id=task.payload.get("user_id", ""),
+            from career_copilot.queue import generate_brief_and_send_async
+
+            asyncio.create_task(
+                generate_brief_and_send_async(
+                    prof_name=data["prof_name"],
+                    affiliation=data["affiliation"],
+                    recent_papers=data["recent_papers"],
+                    user_interests=data["user_interests"],
+                    homepage=data.get("homepage", ""),
+                    overlap_score=data.get("overlap_score", 0.0),
+                    chat_id=task.payload.get("user_id", ""),
+                )
             )
             logger.info("brief_enqueued", name=data["prof_name"])
             return TaskResult(
@@ -387,16 +391,20 @@ def wire_paper_tracker(dispatcher: Dispatcher) -> None:
             )
 
         try:
-            from career_copilot.queue import generate_professor_brief
+            import asyncio
 
-            generate_professor_brief.delay(
-                prof_name=data["prof_name"],
-                affiliation=data["affiliation"],
-                recent_papers=data["recent_papers"],
-                user_interests=data["user_interests"],
-                homepage=data.get("homepage", ""),
-                overlap_score=data.get("overlap_score", 0.0),
-                chat_id=task.payload.get("user_id", ""),
+            from career_copilot.queue import generate_brief_and_send_async
+
+            asyncio.create_task(
+                generate_brief_and_send_async(
+                    prof_name=data["prof_name"],
+                    affiliation=data["affiliation"],
+                    recent_papers=data["recent_papers"],
+                    user_interests=data["user_interests"],
+                    homepage=data.get("homepage", ""),
+                    overlap_score=data.get("overlap_score", 0.0),
+                    chat_id=task.payload.get("user_id", ""),
+                )
             )
             logger.info("brief_enqueued_from_button", name=data["prof_name"])
             return TaskResult(

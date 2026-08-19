@@ -9,6 +9,7 @@ Redis (Upstash) used as result backend in both cases.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from urllib.parse import quote_plus
@@ -117,15 +118,42 @@ def generate_professor_brief(
     homepage: str = "",
     overlap_score: float = 0.0,
 ) -> dict[str, object]:
-    """Generate the LLM-powered sections of a professor brief.
+    """Celery task wrapper — thin over the async implementation.
+
+    Kept for cloud/Modal workers that have a Celery broker. Local single-user
+    setups call :func:`generate_brief_and_send_async` directly from the bot.
+    """
+    return asyncio.run(
+        generate_brief_and_send_async(
+            prof_name=prof_name,
+            affiliation=affiliation,
+            recent_papers=recent_papers,
+            user_interests=user_interests,
+            chat_id=chat_id,
+            homepage=homepage,
+            overlap_score=overlap_score,
+        )
+    )
+
+
+async def generate_brief_and_send_async(
+    prof_name: str,
+    affiliation: str,
+    recent_papers: str,
+    user_interests: str,
+    chat_id: str,
+    homepage: str = "",
+    overlap_score: float = 0.0,
+) -> dict[str, object]:
+    """Generate a professor brief and send it to Telegram, fully async.
+
+    Runs inline in the bot process — no RabbitMQ/Redis broker required. This
+    is the local single-user path; the Celery task above wraps it for cloud.
 
     Routing order:
       1. Modal/Qwen (iff ``brief_via_modal`` is True in settings)
       2. Gemini (strict JSON mode via ModelClient.response_format)
       3. Raw-text fallback if JSON parsing fails
-
-    The structured data (name, affiliation, papers, interests) is collected by
-    the agent BEFORE enqueuing; this task only handles LLM generation.
     """
     from backbone.model_client import ModelClient
     from backbone.prompt_registry.loader import load as load_prompt, render
@@ -145,12 +173,12 @@ def generate_professor_brief(
     llm_output = ""
     used = "unknown"
     if settings.brief_via_modal:
-        llm_output, used = _call_modal_qwen(prompt)
+        llm_output, used = await asyncio.to_thread(_call_modal_qwen, prompt)
 
     if not llm_output:
         client = ModelClient()
         try:
-            llm_output = client.generate_sync(
+            llm_output = await client.generate(
                 model=template.model.name or "gemini-2.5-flash",
                 prompt=prompt,
                 temperature=template.model.temperature,
@@ -160,9 +188,8 @@ def generate_professor_brief(
             )
             used = "gemini-json"
         except Exception as exc:
-            send_brief_to_telegram.delay(
-                chat_id=chat_id,
-                text=f"Could not generate the brief for {prof_name} ({exc})",
+            await _send_telegram_text_async(
+                chat_id, f"Could not generate the brief for {prof_name} ({exc})"
             )
             return {"success": False, "error": str(exc)[:200]}
 
@@ -176,7 +203,6 @@ def generate_professor_brief(
             overlap_score=overlap_score,
         )
     else:
-        # Free-text fallback: strip noise the LLM may still add.
         brief = _format_brief_text(
             llm_output,
             prof_name=prof_name,
@@ -185,8 +211,31 @@ def generate_professor_brief(
             overlap_score=overlap_score,
         )
 
-    send_brief_to_telegram.delay(chat_id=chat_id, text=brief)
+    await _send_telegram_text_async(chat_id, brief)
     return {"success": True, "text": llm_output[:200], "used": used}
+
+
+async def _send_telegram_text_async(chat_id: str, text: str) -> dict[str, object]:
+    """Send plain text to Telegram, splitting long messages. Async (httpx)."""
+    import httpx
+
+    token = get_settings().telegram_bot_token
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    max_len = 4000
+    chunks = _split_text(text, max_len)
+    last_id = None
+    async with httpx.AsyncClient(timeout=10) as client:
+        for i, chunk in enumerate(chunks):
+            payload: dict[str, object] = {"chat_id": chat_id, "text": chunk}
+            try:
+                resp = await client.post(url, json=payload)
+                resp.raise_for_status()
+                last_id = resp.json().get("result", {}).get("message_id")
+            except Exception as exc:
+                if i == 0:
+                    return {"success": False, "error": str(exc)}
+                break
+    return {"success": True, "message_id": last_id, "chunks": len(chunks)}
 
 
 def _call_modal_qwen(prompt: str) -> tuple[str, str]:
