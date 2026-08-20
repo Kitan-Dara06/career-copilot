@@ -15,13 +15,10 @@ Conventions:
 from __future__ import annotations
 
 import hashlib
-from datetime import UTC, datetime, date
+from datetime import UTC, date, datetime
 from typing import Any
 
-import yaml
 from sqlalchemy import text
-
-from backbone.db.session import async_session_factory
 
 
 def _now_iso() -> str:
@@ -45,11 +42,20 @@ def _iso(value: datetime | date | str | None) -> str | None:
     return str(value)
 
 
+def _parse_date(value: str) -> date:
+    """Parse an ISO date (or datetime) string into a ``date`` for DATE binds."""
+    return date.fromisoformat(value[:10])
+
+
 def _session_factory():
-    """Lazy import so monkeypatch.setattr('backbone.db.session.async_session_factory', ...) works in tests."""
+    """Return a sessionmaker (lazy import so tests can patch it).
+
+    Callers use ``async with _session_factory()() as session`` — the outer
+    call returns the sessionmaker, the inner call returns an AsyncSession.
+    """
     from backbone.db.session import async_session_factory
 
-    return async_session_factory
+    return async_session_factory()
 
 
 async def get_active_workspace_id(chat_id: str) -> int | None:
@@ -166,14 +172,14 @@ async def list_tasks(
         params["status"] = status
     if due_before:
         where += " AND due_date IS NOT NULL AND due_date <= :due"
-        params["due"] = due_before
+        params["due"] = _parse_date(due_before)
     async with _session_factory()() as session:
         result = await session.execute(
             text(
                 "SELECT id, goal_id, workspace_id, title, description, due_date,"
                 " status, blocked_by_task_id, created_at, updated_at"
                 f" FROM planning_tasks WHERE {where}"
-                " ORDER BY due_date NULLS LAST, priority DESC"
+                " ORDER BY due_date NULLS LAST, created_at DESC"
             ),
             params,
         )

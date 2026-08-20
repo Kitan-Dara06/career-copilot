@@ -26,21 +26,6 @@ class _FakeRow(SimpleNamespace):
     pass
 
 
-class _FakeSession:
-    def __init__(self, rows: list[Any]) -> None:
-        self._rows = list(rows)
-
-    async def __aenter__(self) -> "_FakeSession":
-        return self
-
-    async def __aexit__(self, *exc: Any) -> bool:
-        return False
-
-    async def execute(self, stmt: Any, params: dict[str, Any] | None = None) -> Any:
-        # Lazy queue: pop one row per execute call so each query gets its own
-        return _FakeResult(self._rows.pop(0) if self._rows else [])
-
-
 class _FakeResult:
     def __init__(self, rows: Any) -> None:
         # _single=True means rows is a single row object
@@ -105,10 +90,13 @@ class _FakeSession:
 def _patch(monkeypatch: Any, results: list[Any]) -> None:
     import backbone.db.session as db_session
 
+    # One shared factory per test so every ``_session_factory()()`` in a query
+    # chain (e.g. get_summary) draws from the same sequential result pool.
+    factory = _FakeSessionFactory(results)
     monkeypatch.setattr(
         db_session,
         "async_session_factory",
-        lambda: _FakeSessionMaker(results),
+        lambda: factory,
     )
 
 

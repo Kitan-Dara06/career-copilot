@@ -82,7 +82,7 @@ class ContributionFinderAgent:
         # Phase 2: score + filter
         profile = self._load_cf_prefs()
         min_score = profile.get("min_impact_score", MIN_IMPACT_SCORE)
-        scored = self._score_all(all_issues, profile)
+        scored = await self._score_all(all_issues, profile)
         scored = [s for s in scored if s["_impact_score"] >= min_score]
         scored.sort(key=lambda s: s["_impact_score"], reverse=True)
         print(f"[cf] {len(scored)} above threshold ({min_score})")
@@ -118,7 +118,7 @@ class ContributionFinderAgent:
                 continue
         print(f"[cf] {len(all_issues)} from {len(repos)} tracked repos")
         profile = self._load_cf_prefs()
-        scored = self._score_all(all_issues, profile)
+        scored = await self._score_all(all_issues, profile)
         scored = [s for s in scored if s["_impact_score"] >= profile.get("min_impact_score", MIN_IMPACT_SCORE)]
         scored.sort(key=lambda s: s["_impact_score"], reverse=True)
         top = scored[:20]
