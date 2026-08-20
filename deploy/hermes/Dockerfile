@@ -18,6 +18,9 @@ RUN apt-get update \
 # 1) Hermes Agent, pinned to the commit tested locally. Fetch the commit as
 #    a tarball (avoids anonymous git-clone rate limits / HTTP 429 and leaves
 #    no .git or token in the image).
+#    uv sync installs only core deps by default; we need the `mcp` extra (MCP
+#    client for the career_copilot server) plus aiohttp (api_server adapter,
+#    pinned to the same patched version the `messaging` extra ships).
 RUN curl -fsSL --retry 4 --retry-delay 5 \
       https://codeload.github.com/NousResearch/hermes-agent/tar.gz/a01d2ee \
       -o /tmp/hermes.tgz \
@@ -25,7 +28,8 @@ RUN curl -fsSL --retry 4 --retry-delay 5 \
     && tar -xzf /tmp/hermes.tgz -C /opt/hermes-agent --strip-components=1 \
     && rm /tmp/hermes.tgz \
     && cd /opt/hermes-agent \
-    && uv sync --no-dev
+    && uv sync --no-dev --extra mcp \
+    && uv pip install --python /opt/hermes-agent/.venv/bin/python "aiohttp==3.14.3"
 
 # 2) Career Copilot — embedded so Hermes can launch the MCP server subprocess.
 WORKDIR /app/career-copilot
