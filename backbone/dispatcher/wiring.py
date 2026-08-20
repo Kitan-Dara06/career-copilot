@@ -695,7 +695,8 @@ def wire_contribution_finder(dispatcher: Dispatcher) -> None:
                 repo = o.get("repo_full_name", "")
                 score = o.get("_impact_score", 0)
                 eff = o.get("estimated_effort", "")
-                lines.append(f"{i+1}. [{eff}] {title}")
+                badge = f"[{eff}] " if eff else ""
+                lines.append(f"{i+1}. {badge}{title}")
                 lines.append(f"    {repo} | score={score:.2f}")
                 lines.append("")
             return TaskResult(task_id=task.id, success=True, output="\n".join(lines))

@@ -49,6 +49,53 @@ def _format_effort(bucket: str) -> str:
     return mapping.get(bucket, f"📌{bucket}")
 
 
+def _estimate_effort(issue: dict[str, Any]) -> str:
+    """Label-based effort fallback before/without Gemini analysis."""
+    labels = [lbl.lower() for lbl in (issue.get("labels") or [])]
+    if "good first issue" in labels or "documentation" in labels:
+        return "1-2 days"
+    if "help wanted" in labels or "bug" in labels:
+        return "half day"
+    return ""
+
+
+def _dedup_issues(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop duplicate GitHub issues across queries.
+
+    A row is a duplicate if it repeats the same (repo, issue number) — the
+    same issue surfaced by multiple queries — OR the same (repo, title), a
+    common pattern in auto-generated backlogs where one task gets filed twice.
+    """
+    seen_ids: set[tuple[str, int]] = set()
+    seen_titles: set[tuple[str, str]] = set()
+    out: list[dict[str, Any]] = []
+    for iss in issues:
+        repo = iss.get("repo_full_name", "")
+        id_key = (repo, iss.get("issue_number", 0))
+        title_key = (repo, (iss.get("title") or "").strip().lower())
+        if id_key in seen_ids or title_key in seen_titles:
+            continue
+        seen_ids.add(id_key)
+        seen_titles.add(title_key)
+        out.append(iss)
+    return out
+
+
+def _cap_per_repo(
+    scored: list[dict[str, Any]], per_repo: int
+) -> list[dict[str, Any]]:
+    """Keep only the best ``per_repo`` issues per repo (by order = score)."""
+    counts: dict[str, int] = {}
+    out: list[dict[str, Any]] = []
+    for s in scored:
+        repo = s.get("repo_full_name", "")
+        if counts.get(repo, 0) >= per_repo:
+            continue
+        counts[repo] = counts.get(repo, 0) + 1
+        out.append(s)
+    return out
+
+
 class ContributionFinderAgent:
     def __init__(self, task_ctx: Any = None) -> None:
         self.ctx = task_ctx
@@ -77,7 +124,8 @@ class ContributionFinderAgent:
             except Exception as exc:
                 logger.warning("cf_search_failed", query=query[:50], error=str(exc))
                 continue
-        print(f"[cf] {len(all_issues)} raw issues from {len(queries)} queries")
+        all_issues = _dedup_issues(all_issues)
+        print(f"[cf] {len(all_issues)} unique issues from {len(queries)} queries")
 
         # Phase 2: score + filter
         profile = self._load_cf_prefs()
@@ -102,7 +150,8 @@ class ContributionFinderAgent:
         scored.sort(key=lambda s: s["_impact_score"], reverse=True)
 
         max_per = profile.get("max_opportunities_per_digest", MAX_OPPS_PER_DIGEST)
-        return scored[:max_per]
+        per_repo = int(profile.get("max_per_repo", 4))
+        return _cap_per_repo(scored, per_repo)[:max_per]
 
     async def run_discovery_tracked(self) -> list[dict[str, Any]]:
         """Path B: fetch issues from tracked repos only."""
@@ -116,7 +165,8 @@ class ContributionFinderAgent:
             except Exception as exc:
                 logger.warning("cf_tracked_failed", repo=repo["full_name"], error=str(exc))
                 continue
-        print(f"[cf] {len(all_issues)} from {len(repos)} tracked repos")
+        all_issues = _dedup_issues(all_issues)
+        print(f"[cf] {len(all_issues)} unique issues from {len(repos)} tracked repos")
         profile = self._load_cf_prefs()
         scored = await self._score_all(all_issues, profile)
         scored = [s for s in scored if s["_impact_score"] >= profile.get("min_impact_score", MIN_IMPACT_SCORE)]
@@ -124,7 +174,8 @@ class ContributionFinderAgent:
         top = scored[:20]
         if top:
             await self._analyze_top(top)
-        return scored[:profile.get("max_opportunities_per_digest", MAX_OPPS_PER_DIGEST)]
+        per_repo = int(profile.get("max_per_repo", 4))
+        return _cap_per_repo(scored, per_repo)[:profile.get("max_opportunities_per_digest", MAX_OPPS_PER_DIGEST)]
 
     # ── Data loaders ──────────────────────────────────────────────
 
@@ -154,6 +205,7 @@ class ContributionFinderAgent:
             "digest_cadence_days": 7,
             "min_impact_score": MIN_IMPACT_SCORE,
             "language_filter": "python",
+            "max_per_repo": 4,
         }
         # Override from user_profile if present
         user_cf = raw.get("cf_prefs", {})
@@ -202,7 +254,8 @@ class ContributionFinderAgent:
         """Execute one GitHub search query, return parsed issues."""
         from backbone.tools.github import SearchIssuesInput, SearchIssuesTool
         tool = SearchIssuesTool()
-        out = await tool(self.ctx, SearchIssuesInput(query=query, per_page=30))
+        # Larger pool so a single fast-moving repo cannot monopolise the top-N.
+        out = await tool(self.ctx, SearchIssuesInput(query=query, per_page=50))
         return [i.model_dump() for i in out.issues]
 
     # ── Scoring ───────────────────────────────────────────────────
@@ -230,6 +283,8 @@ class ContributionFinderAgent:
             score = self._compute_impact(iss, now, preferred, skill_match)
             iss["_impact_score"] = round(score, 2)
             iss["_skill_match"] = round(skill_match, 2)
+            # Label-based effort so cards read well even before Gemini analysis.
+            iss.setdefault("estimated_effort", _estimate_effort(iss))
             scored.append(iss)
         return scored
 
