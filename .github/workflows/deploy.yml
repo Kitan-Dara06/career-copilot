@@ -137,29 +137,47 @@ jobs:
 
       - name: Deploy worker
         run: |
-          az containerapp create \
-            --name career-copilot-worker \
-            --resource-group career-copilot \
-            --environment career-copilot-env \
-            --image careercopilot.azurecr.io/career-copilot:latest \
-            --registry-server careercopilot.azurecr.io \
-            --registry-username $(az acr credential show --name careercopilot --query username -o tsv) \
-            --registry-password $(az acr credential show --name careercopilot --query "passwords[0].value" -o tsv) \
-            --command "/app/docker-entrypoint.sh worker" \
-            --cpu 0.5 --memory 1.0Gi \
-            --env-vars \
-              TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAMBOTTOKEN }} \
-              GEMINI_API_KEY=${{ secrets.GEMINIAPIKEY }} \
-              DEEPSEEK_API_KEY=${{ secrets.DEEPSEEKAPIKEY }} \
-              VOYAGE_API_KEY=${{ secrets.VOYAGEAPIKEY }} \
-              DATABASE_URL=${{ secrets.DATABASEURL }} \
-              QDRANT_URL=${{ secrets.QDRANTURL }} \
-              QDRANT_API_KEY=${{ secrets.QDRANTAPIKEY }} \
-              TAVILY_API_KEY=${{ secrets.TAVILYAPIKEY }} \
-              FIRECRAWL_API_KEY=${{ secrets.FIRECRAWLAPIKEY }} \
-              GITHUB_TOKEN=${{ secrets.GITHUBTOKEN }} \
-              HERMES_API_URL=https://${{ env.HERMES_FQDN }}/v1 \
-              HERMES_API_KEY=${{ secrets.HERMESAPIKEY }}
+          ENV_ARGS=(
+            'TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAMBOTTOKEN }}'
+            'GEMINI_API_KEY=${{ secrets.GEMINIAPIKEY }}'
+            'DEEPSEEK_API_KEY=${{ secrets.DEEPSEEKAPIKEY }}'
+            'VOYAGE_API_KEY=${{ secrets.VOYAGEAPIKEY }}'
+            'DATABASE_URL=${{ secrets.DATABASEURL }}'
+            'QDRANT_URL=${{ secrets.QDRANTURL }}'
+            'QDRANT_API_KEY=${{ secrets.QDRANTAPIKEY }}'
+            'TAVILY_API_KEY=${{ secrets.TAVILYAPIKEY }}'
+            'FIRECRAWL_API_KEY=${{ secrets.FIRECRAWLAPIKEY }}'
+            'GITHUB_TOKEN=${{ secrets.GITHUBTOKEN }}'
+            'HERMES_API_URL=https://${{ env.HERMES_FQDN }}/v1'
+            'HERMES_API_KEY=${{ secrets.HERMESAPIKEY }}'
+          )
+          IMAGE=careercopilot.azurecr.io/career-copilot:latest
+          if az containerapp show --name career-copilot-worker --resource-group career-copilot > /dev/null 2>&1; then
+            echo "Updating existing worker app..."
+            az containerapp update \
+              --name career-copilot-worker \
+              --resource-group career-copilot \
+              --image $IMAGE \
+              --command /app/docker-entrypoint.sh \
+              --args worker \
+              --min-replicas 1 --max-replicas 1 \
+              --replace-env-vars "${ENV_ARGS[@]}"
+          else
+            echo "Creating worker app..."
+            az containerapp create \
+              --name career-copilot-worker \
+              --resource-group career-copilot \
+              --environment career-copilot-env \
+              --image $IMAGE \
+              --registry-server careercopilot.azurecr.io \
+              --registry-username $(az acr credential show --name careercopilot --query username -o tsv) \
+              --registry-password $(az acr credential show --name careercopilot --query "passwords[0].value" -o tsv) \
+              --command /app/docker-entrypoint.sh \
+              --args worker \
+              --cpu 0.5 --memory 1.0Gi \
+              --min-replicas 1 --max-replicas 1 \
+              --env-vars "${ENV_ARGS[@]}"
+          fi
 
       - name: Notify
         run: echo "Deployed bot + worker + hermes to career-copilot"
