@@ -15,10 +15,16 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends git build-essential ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
-# 1) Hermes Agent, pinned to the commit tested locally.
-RUN git clone https://github.com/NousResearch/hermes-agent.git /opt/hermes-agent \
+# 1) Hermes Agent, pinned to the commit tested locally. Fetch the commit as
+#    a tarball (avoids anonymous git-clone rate limits / HTTP 429 and leaves
+#    no .git or token in the image).
+RUN curl -fsSL --retry 4 --retry-delay 5 \
+      https://codeload.github.com/NousResearch/hermes-agent/tar.gz/a01d2ee \
+      -o /tmp/hermes.tgz \
+    && mkdir -p /opt/hermes-agent \
+    && tar -xzf /tmp/hermes.tgz -C /opt/hermes-agent --strip-components=1 \
+    && rm /tmp/hermes.tgz \
     && cd /opt/hermes-agent \
-    && git checkout a01d2ee \
     && uv sync --no-dev
 
 # 2) Career Copilot — embedded so Hermes can launch the MCP server subprocess.
