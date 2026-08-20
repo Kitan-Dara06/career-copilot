@@ -11,7 +11,29 @@ Hermes launches this same command via its MCP config (see deploy/hermes/).
 
 from __future__ import annotations
 
-from mcp.server.fastmcp import FastMCP
+import logging
+import sys
+
+# ── Stdio-transport hygiene (must run before any tool module is imported) ──
+# The stdio MCP transport reserves stdout for JSON-RPC messages only. Tool
+# registration logs (backbone.tools.registry.register → structlog) fire at
+# import time, and if structlog prints to stdout it corrupts the client's
+# JSON-RPC parser (Hermes: "Failed to parse JSONRPC message from server").
+# Pin the stdlib root handler to stderr and route structlog through stdlib
+# logging so application logs can never leak onto the transport. Without
+# ``force=True`` this is a no-op when pytest has already configured a root
+# handler, so test log capture is untouched.
+logging.basicConfig(
+    stream=sys.stderr,
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s %(message)s",
+)
+
+from career_copilot.config.logging import configure_logging  # noqa: E402
+
+configure_logging(json_output=False)
+
+from mcp.server.fastmcp import FastMCP  # noqa: E402
 
 from .adapters import (
     discover_professors,
