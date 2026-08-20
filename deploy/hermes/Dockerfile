@@ -10,6 +10,11 @@ ENV UV_LINK_MODE=copy \
     HERMES_HOME=/root/.hermes \
     PATH="/opt/hermes-agent/.venv/bin:/root/.local/bin:${PATH}"
 
+# Build prerequisites (the slim uv image has no git / compilers).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git build-essential ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
 # 1) Hermes Agent, pinned to the commit tested locally.
 RUN git clone https://github.com/NousResearch/hermes-agent.git /opt/hermes-agent \
     && cd /opt/hermes-agent \
