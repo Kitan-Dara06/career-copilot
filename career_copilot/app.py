@@ -14,7 +14,12 @@ from telegram import Update
 from telegram.ext import Application
 
 from backbone.dispatcher.dispatcher import Dispatcher
-from backbone.dispatcher.wiring import wire_contribution_finder, wire_job_hunter, wire_paper_tracker
+from backbone.dispatcher.wiring import (
+    wire_contribution_finder,
+    wire_job_hunter,
+    wire_paper_tracker,
+    wire_planner,
+)
 from backbone.observability import setup_telemetry
 from backbone.telegram.bot import build_bot
 from career_copilot.config import configure_logging, get_settings
@@ -37,6 +42,7 @@ def create_app() -> FastAPI:
     wire_paper_tracker(dispatcher)
     wire_job_hunter(dispatcher)
     wire_contribution_finder(dispatcher)
+    wire_planner(dispatcher)
 
     # Build Telegram bot Application
     bot_app: Application[Any, Any, Any, Any, Any, Any] = build_bot(settings, dispatcher)
@@ -99,6 +105,7 @@ async def run_polling() -> None:
     wire_paper_tracker(dispatcher)
     wire_job_hunter(dispatcher)
     wire_contribution_finder(dispatcher)
+    wire_planner(dispatcher)
 
     bot_app = build_bot(settings, dispatcher)
 

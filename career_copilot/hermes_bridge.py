@@ -27,6 +27,9 @@ from career_copilot.config import get_settings
 # exchanges and follow-ups without unbounded memory growth.
 MAX_HISTORY_MESSAGES = 10
 
+# Single-user platform: all planning state is keyed by this owner id.
+PLANNING_USER = "aaliyah"
+
 
 _SYSTEM_PROMPT: str | None = None
 
@@ -55,6 +58,44 @@ def _default_system_prompt() -> str:
 
 class HermesBridgeError(Exception):
     """Raised when the Hermes API server cannot produce a response."""
+
+
+async def _workspace_context(chat_id: str) -> str:
+    """Compact planning snapshot prepended to a fresh session.
+
+    Session continuity comes from the workspace, not Hermes memory (§4 of the
+    harness design): on the first message of a chat we inject the current
+    workspace snapshot so Hermes has state without chat history. The Hermes
+    API server ignores ``system`` messages, so the snapshot is prepended as a
+    user-role block instead.
+    """
+    try:
+        from backbone.mcp.planning import get_active_workspace_id, get_summary
+
+        wid = await get_active_workspace_id(chat_id)
+        if wid is None:
+            return ""
+        summary = await get_summary(wid)
+        if "error" in summary:
+            return ""
+        ws = summary.get("workspace", {}) or {}
+        lines = [
+            f"[Planning context — {ws.get('name', 'Workspace')} "
+            f"({ws.get('intake_year', '')})]"
+        ]
+        goals = summary.get("open_goals_titles") or []
+        if goals:
+            lines.append("Open goals: " + "; ".join(goals[:5]))
+        overdue = summary.get("overdue_tasks_titles") or []
+        if overdue:
+            lines.append("Overdue: " + "; ".join(overdue[:5]))
+        decisions = summary.get("confirmed_decisions_titles") or []
+        if decisions:
+            lines.append("Decisions: " + "; ".join(decisions[:5]))
+        lines.append(f"{summary.get('total_tasks_open', 0)} open task(s).")
+        return "\n".join(lines)
+    except Exception:
+        return ""
 
 
 class HermesBridge:
@@ -109,6 +150,12 @@ class HermesBridge:
         elif _default_system_prompt():
             messages.append({"role": "system", "content": _default_system_prompt()})
         messages.extend(history)
+        # Session bootstrap: on a fresh chat, prepend the active-workspace
+        # snapshot so Hermes has context without needing chat history.
+        if not history:
+            context = await _workspace_context(PLANNING_USER)
+            if context:
+                messages.append({"role": "user", "content": context})
         messages.append({"role": "user", "content": message})
 
         payload: dict[str, Any] = {

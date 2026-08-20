@@ -665,6 +665,88 @@ def wire_job_hunter(dispatcher: Dispatcher) -> None:
 
 
 
+def _proposal_text(result: dict) -> str:
+    """Render a proposal/result dict for a Telegram reply."""
+    status = result.get("status", "pending")
+    summary = result.get("summary", "")
+    if status == "approved":
+        return f"✅ Applied ({result.get('risk_level', '?')}): {summary}"
+    if status == "pending":
+        pid = result.get("proposal_id", "?")
+        return (
+            f"📝 Queued ({result.get('risk_level', '?')}): {summary}\n"
+            f"    Approve: /approve {pid}    Skip: /skip {pid}"
+        )
+    return f"⏭️ Skipped: {summary}"
+
+
+def wire_planner(dispatcher: Dispatcher) -> None:
+    """Register the Phase 2 planning commands and proposal callbacks.
+
+    All planning writes are proposal-gated: ``planning_writes`` inserts a
+    ``planning_proposals`` row and (for low-risk ops) applies it immediately.
+    Medium/high-risk proposals stay pending until the user runs ``/approve``
+    or ``/skip``, or taps the inline buttons from ``/proposals``.
+    """
+    from backbone.mcp import planning_writes as pw
+    from backbone.mcp.planning import get_active_workspace_id, list_workspaces
+
+    async def handle_workspace(task: Task) -> TaskResult:
+        args = task.payload.get("args", [])
+        sub = args[0] if args else "list"
+        if sub == "use":
+            if len(args) < 2 or not str(args[1]).isdigit():
+                return TaskResult(task_id=task.id, success=False, error="Usage: /workspace use <id>")
+            result = await pw.propose_switch_workspace(int(args[1]))
+            return TaskResult(task_id=task.id, success=True, output=_proposal_text(result))
+
+        workspaces = await list_workspaces()
+        if not workspaces:
+            return TaskResult(task_id=task.id, success=True, output="No workspaces yet.")
+        active = await get_active_workspace_id(pw.DEFAULT_CHAT)
+        lines = [f"Active workspace: {active or 'none'}", ""]
+        for w in workspaces:
+            marker = "▶ " if w["id"] == active else "  "
+            lines.append(
+                f"{marker}{w['id']}. {w['name']} ({w['target_degree']}, "
+                f"{w['intake_year']}) — {w['status']}"
+            )
+        lines.append("")
+        lines.append("Use /workspace use <id> to switch. New workspace via /ask.")
+        return TaskResult(task_id=task.id, success=True, output="\n".join(lines))
+
+    async def handle_proposal_approve(task: Task) -> TaskResult:
+        args = task.payload.get("args") or []
+        pid = task.payload.get("item_id") or (args[0] if args else None)
+        if pid is None:
+            return TaskResult(task_id=task.id, success=False, error="Usage: /approve <proposal_id>")
+        try:
+            result = await pw.apply_proposal(int(pid))
+        except (ValueError, TypeError) as exc:
+            return TaskResult(task_id=task.id, success=False, error=str(exc))
+        return TaskResult(task_id=task.id, success=True, output=_proposal_text(result))
+
+    async def handle_proposal_skip(task: Task) -> TaskResult:
+        args = task.payload.get("args") or []
+        pid = task.payload.get("item_id") or (args[0] if args else None)
+        if pid is None:
+            return TaskResult(task_id=task.id, success=False, error="Usage: /skip <proposal_id>")
+        try:
+            result = await pw.skip_proposal(int(pid))
+        except (ValueError, TypeError) as exc:
+            return TaskResult(task_id=task.id, success=False, error=str(exc))
+        return TaskResult(task_id=task.id, success=True, output=_proposal_text(result))
+
+    dispatcher.register_command("workspace", "planner", handle_workspace)
+    dispatcher.register_command("approve", "planner", handle_proposal_approve)
+    dispatcher.register_command("skip", "planner", handle_proposal_skip)
+    # Inline-button callbacks (data: {"command": "proposal_approve"|...}).
+    dispatcher.register_command("proposal_approve", "planner", handle_proposal_approve)
+    dispatcher.register_command("proposal_skip", "planner", handle_proposal_skip)
+
+    logger.info("planner_wired")
+
+
 def wire_contribution_finder(dispatcher: Dispatcher) -> None:
     """Register all Contribution Finder commands with the given dispatcher."""
     from agents.contribution_finder.agent import ContributionFinderAgent

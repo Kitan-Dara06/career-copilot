@@ -27,5 +27,23 @@ mcp_servers:
         - career.papers.search
         - career.professors.search
         - career.jobs.search
+        # Planning — read side (Phase 2)
+        - career.planning.get_summary
+        - career.planning.list_workspaces
+        - career.planning.get_workspace
+        - career.planning.list_goals
+        - career.planning.list_tasks
+        - career.planning.list_decisions
+        - career.planning.list_notes
+        - career.planning.list_artifacts
+        # Planning — write side (Phase 2, proposal-gated)
+        - career.planning.create_workspace
+        - career.planning.add_goal
+        - career.planning.add_task
+        - career.planning.record_decision
+        - career.planning.supersede_decision
+        - career.planning.update_task_status
+        - career.planning.add_note
+        - career.planning.switch_workspace
       resources: false
       prompts: false

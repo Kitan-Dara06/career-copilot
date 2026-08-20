@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -265,6 +266,12 @@ async def command_help(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> N
         "  /contrib [topic]   Find OSS opportunities\n"
         "  /opportunity <id>  Get opportunity details\n"
         "\n"
+        "Planning\n"
+        "  /workspace        List workspaces (use <id> to switch)\n"
+        "  /proposals        Pending writes: Approve/Skip buttons\n"
+        "  /approve <id>     Approve a pending write\n"
+        "  /skip <id>        Skip a pending write\n"
+        "\n"
         "Ask (Hermes)\n"
         "  <message>          Ask anything in natural language\n"
         "  /ask <request>     Same, explicit\n"
@@ -302,4 +309,65 @@ async def command_prefs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 async def command_jh_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``/help_jh`` — show Job Hunter help."""
     await _dispatch(update, context, "help_jh")
+
+
+# ── Planner (Phase 2 planning workspace) ──────────────────────
+
+
+async def command_workspace(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle ``/workspace [list|use <id>]`` — planning workspaces."""
+    args = context.args or []
+    await _dispatch(update, context, "workspace", args)
+
+
+async def command_approve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle ``/approve <proposal_id>`` — apply a pending planning write."""
+    args = context.args or []
+    await _dispatch(update, context, "approve", args)
+
+
+async def command_skip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle ``/skip <proposal_id>`` — dismiss a pending planning write."""
+    args = context.args or []
+    await _dispatch(update, context, "skip", args)
+
+
+async def command_proposals(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle ``/proposals`` — list pending writes with Approve/Skip buttons."""
+    import json
+
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+    from backbone.mcp import planning_writes as pw
+
+    msg = update.effective_message
+    if msg is None:
+        return
+    if not _is_allowed(update):
+        await msg.reply_text("Access denied.")
+        return
+
+    proposals = await pw.list_pending_proposals(pw.DEFAULT_CHAT)
+    if not proposals:
+        await msg.reply_text("No pending proposals.")
+        return
+
+    lines = [f"{len(proposals)} pending proposal(s)", ""]
+    buttons: list[list[Any]] = []
+    for p in proposals:
+        pid = p["proposal_id"]
+        lines.append(f"{pid}. [{p['risk_level']}] {p['summary']}")
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    f"✅ Approve {pid}",
+                    callback_data=json.dumps({"command": "proposal_approve", "item_id": pid}),
+                ),
+                InlineKeyboardButton(
+                    f"⏭️ Skip {pid}",
+                    callback_data=json.dumps({"command": "proposal_skip", "item_id": pid}),
+                ),
+            ]
+        )
+    await msg.reply_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(buttons))
 

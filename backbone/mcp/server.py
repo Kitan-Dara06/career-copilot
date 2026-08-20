@@ -53,6 +53,16 @@ from .planning import (
     list_tasks,
     list_workspaces,
 )
+from .planning_writes import (
+    propose_add_goal,
+    propose_add_note,
+    propose_add_task,
+    propose_create_workspace,
+    propose_record_decision,
+    propose_supersede_decision,
+    propose_switch_workspace,
+    propose_update_task_status,
+)
 from .policy import apply_policy
 
 mcp = FastMCP("career-copilot")
@@ -291,6 +301,179 @@ async def career_planning_get_summary(
     if wid is None:
         return {"error": "no active workspace for chat_id and no workspace_id given"}
     return apply_policy(await get_summary(wid))
+
+
+# ── Planning write tools (Phase 2, §5) — proposals, never direct writes ──
+# Every write returns/creates a ``planning_proposals`` row. Low-risk writes
+# apply immediately; medium/high-risk stay ``pending`` until the user approves
+# them (Telegram inline-button /approve flow). Tell the user their change is
+# queued and to approve it.
+
+
+@mcp.tool(name="career.planning.create_workspace")
+async def career_planning_create_workspace(
+    name: str,
+    intake_year: int,
+    target_degree: str,
+    owner: str = "aaliyah",
+) -> dict:
+    """Propose creating a new planning workspace (e.g. "Master's 2027").
+
+    High-risk: this returns a pending proposal that must be approved.
+
+    Args:
+        name: Workspace name, e.g. "Master's 2027".
+        intake_year: Year of intake, e.g. 2027.
+        target_degree: e.g. "MSc" or "PhD".
+        owner: Owner id (defaults to the single user).
+    """
+    return apply_policy(
+        await propose_create_workspace(name, intake_year, target_degree, owner=owner)
+    )
+
+
+@mcp.tool(name="career.planning.add_goal")
+async def career_planning_add_goal(
+    workspace_id: int,
+    title: str,
+    description: str | None = None,
+    priority: int = 0,
+    parent_id: int | None = None,
+) -> dict:
+    """Propose adding a strategic goal to a workspace.
+
+    Returns a pending proposal (medium risk) that must be approved.
+
+    Args:
+        workspace_id: Target workspace id.
+        title: Goal title, e.g. "Funding strategy".
+        description: Optional detail.
+        priority: Higher first (default 0).
+        parent_id: Optional parent goal id.
+    """
+    return apply_policy(
+        await propose_add_goal(workspace_id, title, description, priority, parent_id)
+    )
+
+
+@mcp.tool(name="career.planning.add_task")
+async def career_planning_add_task(
+    workspace_id: int,
+    goal_id: int,
+    title: str,
+    description: str | None = None,
+    due_date: str | None = None,
+    status: str = "todo",
+) -> dict:
+    """Propose adding a task under a goal.
+
+    Returns a pending proposal (medium risk) that must be approved.
+
+    Args:
+        workspace_id: Target workspace id.
+        goal_id: Parent goal id.
+        title: Task title.
+        description: Optional detail.
+        due_date: Optional ISO date (YYYY-MM-DD).
+        status: todo | doing | blocked | done.
+    """
+    return apply_policy(
+        await propose_add_task(workspace_id, goal_id, title, description, due_date, status)
+    )
+
+
+@mcp.tool(name="career.planning.record_decision")
+async def career_planning_record_decision(
+    workspace_id: int,
+    title: str,
+    rationale: str | None = None,
+    evidence: dict | None = None,
+    status: str = "proposed",
+) -> dict:
+    """Propose recording a decision with rationale and evidence.
+
+    Returns a pending proposal (medium risk) that must be approved.
+
+    Args:
+        workspace_id: Target workspace id.
+        title: Decision title, e.g. "Apply primarily to Canada".
+        rationale: Why.
+        evidence: Provenance dict (sources / retrieved_at).
+        status: idea | recommendation | proposed (default proposed).
+    """
+    return apply_policy(
+        await propose_record_decision(workspace_id, title, rationale, evidence, status)
+    )
+
+
+@mcp.tool(name="career.planning.supersede_decision")
+async def career_planning_supersede_decision(
+    decision_id: int,
+    title: str,
+    rationale: str | None = None,
+) -> dict:
+    """Propose superseding an old decision with a new confirmed one.
+
+    Returns a pending proposal (medium risk) that must be approved.
+
+    Args:
+        decision_id: The decision to mark superseded.
+        title: New decision title replacing it.
+        rationale: Why the change.
+    """
+    return apply_policy(await propose_supersede_decision(decision_id, title, rationale))
+
+
+@mcp.tool(name="career.planning.update_task_status")
+async def career_planning_update_task_status(
+    task_id: int,
+    status: str,
+) -> dict:
+    """Propose updating a task's status (todo/doing/blocked/done).
+
+    Low risk: applied immediately.
+
+    Args:
+        task_id: Target task id.
+        status: One of todo | doing | blocked | done.
+    """
+    return apply_policy(await propose_update_task_status(task_id, status))
+
+
+@mcp.tool(name="career.planning.add_note")
+async def career_planning_add_note(
+    workspace_id: int,
+    body: str,
+    kind: str = "note",
+    pinned: bool = False,
+) -> dict:
+    """Propose adding a free-form note to a workspace.
+
+    Low risk: applied immediately.
+
+    Args:
+        workspace_id: Target workspace id.
+        body: Note text.
+        kind: note | observation | decision_note.
+        pinned: Pin to top (default false).
+    """
+    return apply_policy(await propose_add_note(workspace_id, body, kind, pinned))
+
+
+@mcp.tool(name="career.planning.switch_workspace")
+async def career_planning_switch_workspace(
+    workspace_id: int,
+    chat_id: str = "aaliyah",
+) -> dict:
+    """Propose switching the active workspace for the user.
+
+    Low risk: applied immediately.
+
+    Args:
+        workspace_id: The workspace to make active.
+        chat_id: Chat/user id (defaults to the single user).
+    """
+    return apply_policy(await propose_switch_workspace(workspace_id, chat_id=chat_id))
 
 
 if __name__ == "__main__":
