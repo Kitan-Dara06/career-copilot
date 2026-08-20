@@ -37,6 +37,20 @@ from .policy import apply_policy
 mcp = FastMCP("career-copilot")
 
 
+def _profile_query_default() -> str:
+    """Build a default professor-search query from stored research interests.
+
+    Used when Hermes calls ``career.professors.search`` without a ``query`` so
+    the tool still returns relevant faculty instead of an empty result.
+    """
+    profile = load_profile()
+    keywords = profile.get("keywords") or []
+    if keywords:
+        return " ".join(str(k) for k in keywords[:6])
+    interests = (profile.get("research_interests") or "").strip()
+    return interests[:80] if interests else ""
+
+
 @mcp.tool(name="career.profile.get")
 def career_profile_get() -> dict:
     """Get the user's canonical profile.
@@ -63,7 +77,7 @@ async def career_papers_search(query: str, limit: int = 5) -> dict:
 
 
 @mcp.tool(name="career.professors.search")
-async def career_professors_search(query: str, limit: int = 10) -> dict:
+async def career_professors_search(query: str | None = None, limit: int = 10) -> dict:
     """Search professors — your watchlist first, then CSRankings faculty.
 
     Watchlist matches are tagged ``source: watchlist``. If the query names
@@ -72,11 +86,15 @@ async def career_professors_search(query: str, limit: int = 10) -> dict:
     ``source: csrankings`` and ranked by publication activity.
 
     Args:
-        query: Name, affiliation, institution, and/or area (e.g. "McGill retrieval").
+        query: Optional name, affiliation, institution, and/or area
+            (e.g. "McGill retrieval"). If omitted, your stored research
+            interests are used as the default search.
         limit: Max total results (1-50, default 10).
 
     Read-only.
     """
+    if not (query and query.strip()):
+        query = _profile_query_default()
     watchlist = await search_professors(query, limit)
     discovered: list[dict] = []
     if should_discover(query):
