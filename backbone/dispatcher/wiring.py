@@ -792,7 +792,31 @@ def wire_contribution_finder(dispatcher: Dispatcher) -> None:
     async def handle_opportunity(task: Task) -> TaskResult:
         return TaskResult(task_id=task.id, success=True, output="Use /contrib to find opportunities.")
 
+    async def _feedback(task: Task, signal: str, label: str) -> TaskResult:
+        from backbone.tools.contribution_store import record_feedback
+
+        args = task.payload.get("args") or []
+        gid = task.payload.get("item_id") or (args[0] if args else None)
+        if not gid:
+            return TaskResult(task_id=task.id, success=False, error="Missing opportunity id")
+        try:
+            ok = await record_feedback(str(gid), signal)
+        except ValueError as exc:
+            return TaskResult(task_id=task.id, success=False, error=str(exc))
+        if not ok:
+            return TaskResult(task_id=task.id, success=False, error="Couldn't record feedback.")
+        return TaskResult(task_id=task.id, success=True, output=f"{label}: {gid}")
+
+    async def handle_cf_interested(task: Task) -> TaskResult:
+        return await _feedback(task, "interested", "👍 Interested")
+
+    async def handle_cf_pass(task: Task) -> TaskResult:
+        return await _feedback(task, "pass", "👎 Passed")
+
     dispatcher.register_command("contrib", "contribution_finder", handle_contrib)
     dispatcher.register_command("opportunity", "contribution_finder", handle_opportunity)
+    # Inline buttons (data: {"command": "contrib_interest", "item_id": "repo#num"}).
+    dispatcher.register_command("contrib_interest", "contribution_finder", handle_cf_interested)
+    dispatcher.register_command("contrib_pass", "contribution_finder", handle_cf_pass)
 
     logger.info("contribution_finder_wired")

@@ -98,9 +98,52 @@ async def command_research(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def command_contrib(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /contrib [topic] — find contribution opportunities."""
-    args = context.args or []
-    await _dispatch(update, context, "contrib", args)
+    """Handle /contrib [topic] — discover + attach 👍/👎 feedback buttons."""
+    import json
+
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+    from backbone.tools.contribution_store import list_fresh
+
+    msg = update.effective_message
+    if msg is None:
+        return
+    if not _is_allowed(update):
+        await msg.reply_text("Access denied.")
+        return
+    dispatcher = context.bot_data.get("dispatcher")
+    if dispatcher is None:
+        await msg.reply_text("⚠️ Dispatcher not initialised.")
+        return
+    user_id = str(update.effective_user.id) if update.effective_user else "unknown"
+
+    try:
+        result: TaskResult = await dispatcher.handle_command(user_id, "contrib", context.args or [])
+    except ValueError as exc:
+        await msg.reply_text(f"⚠️ {exc}")
+        return
+    text = str(result.output) if result.success else f"❌ Error: {result.error}"
+
+    buttons: list[list[Any]] = []
+    if result.success:
+        for o in await list_fresh(10):
+            gid = o["gid"]
+            buttons.append(
+                [
+                    InlineKeyboardButton(
+                        "👍",
+                        callback_data=json.dumps({"command": "contrib_interest", "item_id": gid}),
+                    ),
+                    InlineKeyboardButton(
+                        "👎",
+                        callback_data=json.dumps({"command": "contrib_pass", "item_id": gid}),
+                    ),
+                ]
+            )
+    await msg.reply_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(buttons) if buttons else None,
+    )
 
 
 async def command_opportunity(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

@@ -151,7 +151,9 @@ class ContributionFinderAgent:
 
         max_per = profile.get("max_opportunities_per_digest", MAX_OPPS_PER_DIGEST)
         per_repo = int(profile.get("max_per_repo", 4))
-        return _cap_per_repo(scored, per_repo)[:max_per]
+        result = _cap_per_repo(scored, per_repo)[:max_per]
+        await self._persist(result)
+        return result
 
     async def run_discovery_tracked(self) -> list[dict[str, Any]]:
         """Path B: fetch issues from tracked repos only."""
@@ -175,7 +177,18 @@ class ContributionFinderAgent:
         if top:
             await self._analyze_top(top)
         per_repo = int(profile.get("max_per_repo", 4))
-        return _cap_per_repo(scored, per_repo)[:profile.get("max_opportunities_per_digest", MAX_OPPS_PER_DIGEST)]
+        result = _cap_per_repo(scored, per_repo)[:profile.get("max_opportunities_per_digest", MAX_OPPS_PER_DIGEST)]
+        await self._persist(result)
+        return result
+
+    async def _persist(self, results: list[dict[str, Any]]) -> None:
+        """Upsert discovered opportunities so feedback buttons have a target."""
+        try:
+            from backbone.tools.contribution_store import persist_opportunities
+
+            await persist_opportunities(results)
+        except Exception as exc:
+            logger.warning("cf_persist_failed", error=str(exc))
 
     # ── Data loaders ──────────────────────────────────────────────
 
@@ -276,12 +289,17 @@ class ContributionFinderAgent:
             posting_vecs.extend([list(v) for v in (embeds.embeddings or [])])
         now = datetime.now(UTC)
         preferred = profile.get("preferred_effort_buckets", ["half day", "1-2 days"])
+        from backbone.tools.contribution_store import apply_repo_signal, repo_signals
+
+        signals = await repo_signals()
         scored: list[dict[str, Any]] = []
         for i, iss in enumerate(issues):
             pvec = posting_vecs[i] if i < len(posting_vecs) else [0.0]
             skill_match = self._weighted_max_cosine(pvec)
             score = self._compute_impact(iss, now, preferred, skill_match)
-            iss["_impact_score"] = round(score, 2)
+            boost = apply_repo_signal(iss, signals)
+            iss["_impact_score"] = round(score + boost, 2)
+            iss["_repo_signal"] = boost
             iss["_skill_match"] = round(skill_match, 2)
             # Label-based effort so cards read well even before Gemini analysis.
             iss.setdefault("estimated_effort", _estimate_effort(iss))
@@ -383,24 +401,7 @@ class ContributionFinderAgent:
     # ── Feedback persistence ──────────────────────────────────────
 
     async def record_feedback(self, opp_github_id: str, signal: str) -> bool:
-        """Record interested/pass/doing feedback signal."""
-        from sqlalchemy import text
-        from backbone.db.session import async_session_factory
-        factory = async_session_factory()
-        try:
-            async with factory() as session:
-                await session.execute(
-                    text(
-                        "INSERT INTO contribution_feedback (opportunity_id, user_id, signal, feedback_at) "
-                        "SELECT id, :uid, :sig, now() FROM contribution_opportunities "
-                        "WHERE github_repo || '#' || github_issue_number = :gid "
-                        "ON CONFLICT (user_id, opportunity_id) "
-                        "DO UPDATE SET signal = :sig, feedback_at = now()"
-                    ),
-                    {"uid": "aaliyah", "sig": signal, "gid": opp_github_id},
-                )
-                await session.commit()
-            return True
-        except Exception as exc:
-            logger.warning("cf_feedback_failed", error=str(exc))
-            return False
+        """Record interested/pass/doing feedback (delegates to the store)."""
+        from backbone.tools.contribution_store import record_feedback
+
+        return await record_feedback(opp_github_id, signal)
