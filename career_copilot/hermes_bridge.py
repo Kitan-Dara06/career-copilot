@@ -54,7 +54,14 @@ def _default_system_prompt() -> str:
         "when the user asks for papers, professors, or jobs. Keep replies concise. "
         "When listing papers or professors, use compact numbered lines and put a "
         "clickable URL on every entry; name the source (arxiv / csrankings / "
-        "openalex / web) where relevant."
+        "openalex / web) where relevant. "
+        "For questions about the user's plan, goals, tasks, or decisions (e.g. "
+        "'what did we decide on GRE?'), call the career.planning.get_summary / "
+        "list_goals / list_tasks / list_decisions tools and ground the answer in "
+        "the live data — never answer from assumption or memory. When you propose "
+        "a planning write, call the career.planning.* write tool and then tell the "
+        "user whether it was queued for approval or applied, with the exact "
+        "/approve <id> or /skip <id> command to resolve it."
     )
     return _SYSTEM_PROMPT
 
@@ -92,9 +99,12 @@ async def _workspace_context(chat_id: str) -> str:
         overdue = summary.get("overdue_tasks_titles") or []
         if overdue:
             lines.append("Overdue: " + "; ".join(overdue[:5]))
-        decisions = summary.get("confirmed_decisions_titles") or []
+        decisions = summary.get("decisions") or []
         if decisions:
-            lines.append("Decisions: " + "; ".join(decisions[:5]))
+            lines.append(
+                "Decisions: "
+                + "; ".join(f"[{d['status']}] {d['title']}" for d in decisions[:6])
+            )
         lines.append(f"{summary.get('total_tasks_open', 0)} open task(s).")
         return "\n".join(lines)
     except Exception:
@@ -153,12 +163,12 @@ class HermesBridge:
         elif _default_system_prompt():
             messages.append({"role": "system", "content": _default_system_prompt()})
         messages.extend(history)
-        # Session bootstrap: on a fresh chat, prepend the active-workspace
-        # snapshot so Hermes has context without needing chat history.
-        if not history:
-            context = await _workspace_context(PLANNING_USER)
-            if context:
-                messages.append({"role": "user", "content": context})
+        # Session context: prepend the live active-workspace snapshot every turn
+        # so Hermes always grounds answers in current plan state (decisions,
+        # goals, overdue tasks) — not stale chat history assumptions.
+        context = await _workspace_context(PLANNING_USER)
+        if context:
+            messages.append({"role": "user", "content": context})
         messages.append({"role": "user", "content": message})
 
         payload: dict[str, Any] = {

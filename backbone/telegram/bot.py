@@ -66,6 +66,7 @@ def build_bot(
     application.add_handler(CommandHandler("new", commands.command_new))
     application.add_handler(CommandHandler("workspace", commands.command_workspace))
     application.add_handler(CommandHandler("proposals", commands.command_proposals))
+    application.add_handler(CommandHandler("proposal", commands.command_proposals))
     application.add_handler(CommandHandler("approve", commands.command_approve))
     application.add_handler(CommandHandler("skip", commands.command_skip))
 

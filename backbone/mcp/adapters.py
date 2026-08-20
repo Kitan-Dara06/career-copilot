@@ -52,6 +52,49 @@ _AREA_KEYWORDS: dict[str, str] = {
 
 _DEFAULT_DISCOVER_AREAS: set[str] = {"nlp", "inforet", "mlmining", "ai"}
 
+# Broad topic → sibling terms, so web discovery expands "retrieval" into the
+# full research family (IR, search, ranking, RAG, recommendation) instead of
+# picking a single ambiguous sense like memory or biology.
+_TOPIC_EXPANSIONS: dict[str, list[str]] = {
+    "retrieval": [
+        "information retrieval",
+        "neural retrieval",
+        "dense retrieval",
+        "search",
+        "ranking",
+        "recommender system",
+        "recommendation",
+        "retrieval-augmented generation",
+        "question answering",
+        "web search",
+        "knowledge retrieval",
+    ],
+    "information retrieval": [
+        "neural retrieval",
+        "dense retrieval",
+        "search",
+        "ranking",
+        "recommender system",
+        "retrieval-augmented generation",
+    ],
+    "rag": ["retrieval-augmented generation", "dense retrieval", "vector search"],
+    "recommendation": [
+        "recommender system",
+        "collaborative filtering",
+        "personalization",
+        "ranking",
+    ],
+    "agents": [
+        "multi-agent",
+        "agentic system",
+        "tool use",
+        "llm agent",
+        "agent orchestration",
+        "large language model",
+    ],
+    "agentic": ["multi-agent", "tool use", "llm agent", "agent orchestration"],
+}
+
 
 def should_discover(query: str) -> bool:
     """True if the query targets NEW professors (not just the watchlist).
@@ -261,34 +304,37 @@ async def discover_professors_web(
                 "openalex_id": inst.get("id", ""),
             }
 
-            # Resolve "retrieval" precisely: only use OpenAlex concepts whose
-            # canonical name overlaps the topic — otherwise free-text picks
-            # the wrong sense (memory / biology). For known topics we pin the
-            # concept directly; for unknown topics we fall back to free-text.
-            concept_id: str | None = None
-            topic_norm = topic.lower().strip() if topic else ""
-            if topic_norm:
+            # Concept expansion: "retrieval" must mean Information Retrieval /
+            # search / ranking / RAG — never memory or biology. Resolve the
+            # family (topic + expansions) to OpenAlex concept ids and OR them
+            # in the works filter; if nothing matches, fall back to free-text.
+            concept_ids: list[str] = []
+            topic_norm = (topic or "").lower().strip()
+            expansions = _TOPIC_EXPANSIONS.get(topic_norm, [])
+            terms = [t for t in ([topic_norm] + expansions) if t]
+            if terms:
                 try:
                     resp = await client.get(
                         f"{_OPENALEX_API}/concepts",
-                        params={"search": topic_norm, "per-page": "10"},
+                        params={"search": topic_norm, "per-page": "25"},
                     )
                     resp.raise_for_status()
                     for c in (resp.json().get("results") or []):
-                        canonical = (c.get("display_name") or "").lower()
-                        if topic_norm in canonical or canonical in topic_norm:
-                            concept_id = c.get("id")
+                        if len(concept_ids) >= 6:
                             break
+                        canonical = (c.get("display_name") or "").lower()
+                        if any(t in canonical or canonical in t for t in terms):
+                            concept_ids.append(c.get("id"))
                 except httpx.HTTPError:
-                    concept_id = None
+                    concept_ids = []
 
             works_params: dict[str, Any] = {
                 "filter": f"institutions.id:{inst.get('id', '')}",
                 "per-page": "50",
                 "select": "display_name,authorships",
             }
-            if concept_id:
-                works_params["filter"] += f",concepts.id:{concept_id}"
+            if concept_ids:
+                works_params["filter"] += ",concepts.id:" + "|".join(dict.fromkeys(concept_ids))
             elif topic:
                 works_params["search"] = topic
             try:

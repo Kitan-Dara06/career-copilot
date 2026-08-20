@@ -151,6 +151,28 @@ async def career_professors_search(
         limit=limit,
     )
 
+    # Auto-escalate to the web layer when a named institution yields thin (or
+    # empty) curated results — iSchool / Faculty-of-Information researchers sit
+    # outside CSRankings. OpenAlex rows are merged into the main results; the
+    # Tavily web hits (e.g. a Faculty of Information directory page) are
+    # returned separately as ``web_corroboration`` so they are not swallowed
+    # by the name-dedup (they lack a structured name).
+    payload: dict = {}
+    web_hits: list[dict] = []
+    if institution and len(discovered) < 3:
+        web = await discover_professors_web(institution, topic, limit=limit)
+        known_names = {x["name"].lower() for x in discovered if x.get("name")}
+        for p in web.get("results") or []:
+            if p.get("source") == "web":
+                web_hits.append(p)
+            elif (
+                p.get("source") == "openalex"
+                and p.get("name")
+                and p["name"].lower() not in known_names
+            ):
+                known_names.add(p["name"].lower())
+                discovered.append(p)
+
     merged: list[dict] = [{"source": "watchlist", **p} for p in watchlist]
     seen = {p["name"].lower() for p in merged}
     for p in discovered:
@@ -158,8 +180,10 @@ async def career_professors_search(
             continue
         seen.add(p["name"].lower())
         merged.append(p)
-
-    return apply_policy(merged[: max(1, min(int(limit), 50))])
+    payload["results"] = merged[: max(1, min(int(limit), 50))]
+    if web_hits:
+        payload["web_corroboration"] = web_hits[: max(1, min(int(limit), 5))]
+    return apply_policy(payload)
 
 
 @mcp.tool(name="career.professors.web_search")
@@ -352,7 +376,9 @@ async def career_planning_create_workspace(
 ) -> dict:
     """Propose creating a new planning workspace (e.g. "Master's 2027").
 
-    High-risk: this returns a pending proposal that must be approved.
+    High-risk: this returns a pending proposal that must be approved. Do NOT
+    claim the workspace was created. Reply with: "📝 Queued (high): Create
+    workspace <name> — Approve: /approve <proposal_id>".
 
     Args:
         name: Workspace name, e.g. "Master's 2027".
@@ -375,7 +401,9 @@ async def career_planning_add_goal(
 ) -> dict:
     """Propose adding a strategic goal to a workspace.
 
-    Returns a pending proposal (medium risk) that must be approved.
+    Returns a pending proposal (medium risk) that must be approved. Do NOT
+    claim the goal was added. Reply with exactly: "📝 Queued (medium): Add goal:
+    <title> — Approve: /approve <proposal_id>  Skip: /skip <proposal_id>".
 
     Args:
         workspace_id: Target workspace id.
@@ -400,7 +428,9 @@ async def career_planning_add_task(
 ) -> dict:
     """Propose adding a task under a goal.
 
-    Returns a pending proposal (medium risk) that must be approved.
+    Returns a pending proposal (medium risk) that must be approved. Do NOT
+    claim the task was added. Reply with: "📝 Queued (medium): Add task: <title>
+    — Approve: /approve <proposal_id>".
 
     Args:
         workspace_id: Target workspace id.
@@ -425,7 +455,9 @@ async def career_planning_record_decision(
 ) -> dict:
     """Propose recording a decision with rationale and evidence.
 
-    Returns a pending proposal (medium risk) that must be approved.
+    Returns a pending proposal (medium risk) that must be approved. Do NOT
+    claim the decision was recorded. Reply with: "📝 Queued (medium): Record
+    decision: <title> — Approve: /approve <proposal_id>".
 
     Args:
         workspace_id: Target workspace id.

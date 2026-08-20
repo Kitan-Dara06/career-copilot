@@ -324,6 +324,11 @@ async def get_summary(workspace_id: int) -> dict[str, Any]:
         "overdue_tasks_count": len(overdue_tasks),
         "overdue_tasks_titles": [t["title"] for t in overdue_tasks[:5]],
         "confirmed_decisions_titles": [d["title"] for d in confirmed[:5]],
+        # Full decision list with status, so "what did we decide on GRE?" sees
+        # proposed + confirmed decisions, not just confirmed ones.
+        "decisions": [
+            {"title": d["title"], "status": d["status"]} for d in decisions[:8]
+        ],
         "total_tasks_open": sum(1 for t in tasks if t["status"] in ("todo", "doing")),
         "last_active_at": _now_iso(),
     }
