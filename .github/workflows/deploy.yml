@@ -35,39 +35,50 @@ jobs:
 
       - name: Deploy Hermes (create or update)
         run: |
-          ACR_USER=$(az acr credential show --name careercopilot --query username -o tsv)
-          ACR_PASS=$(az acr credential show --name careercopilot --query "passwords[0].value" -o tsv)
-          COMMON_ARGS="\
-            --name career-copilot-hermes \
-            --resource-group career-copilot \
-            --image careercopilot.azurecr.io/career-copilot-hermes:latest \
-            --registry-server careercopilot.azurecr.io \
-            --registry-username $ACR_USER \
-            --registry-password $ACR_PASS \
-            --min-replicas 1 --max-replicas 1 \
-            --env-vars \
-              API_SERVER_ENABLED=true \
-              API_SERVER_HOST=0.0.0.0 \
-              API_SERVER_PORT=8642 \
-              API_SERVER_KEY=${{ secrets.HERMESAPIKEY }} \
-              GOOGLE_API_KEY=${{ secrets.GOOGLEAPIKEY }} \
-              DATABASE_URL=${{ secrets.DATABASEURL }} \
-              QDRANT_URL=${{ secrets.QDRANTURL }} \
-              QDRANT_API_KEY=${{ secrets.QDRANTAPIKEY }} \
-              TAVILY_API_KEY=${{ secrets.TAVILYAPIKEY }} \
-              VOYAGE_API_KEY=${{ secrets.VOYAGEAPIKEY }} \
-              FIRECRAWL_API_KEY=${{ secrets.FIRECRAWLAPIKEY }} \
-              GITHUB_TOKEN=${{ secrets.GITHUBTOKEN }}"
+          # Env vars as a bash array so a secret value containing spaces or
+          # newlines is passed as ONE --env-vars argument (argparse would
+          # otherwise split it and exit 2).
+          ENV_ARGS=(
+            'API_SERVER_ENABLED=true'
+            'API_SERVER_HOST=0.0.0.0'
+            'API_SERVER_PORT=8642'
+            'API_SERVER_KEY=${{ secrets.HERMESAPIKEY }}'
+            'GOOGLE_API_KEY=${{ secrets.GOOGLEAPIKEY }}'
+            'DATABASE_URL=${{ secrets.DATABASEURL }}'
+            'QDRANT_URL=${{ secrets.QDRANTURL }}'
+            'QDRANT_API_KEY=${{ secrets.QDRANTAPIKEY }}'
+            'TAVILY_API_KEY=${{ secrets.TAVILYAPIKEY }}'
+            'VOYAGE_API_KEY=${{ secrets.VOYAGEAPIKEY }}'
+            'FIRECRAWL_API_KEY=${{ secrets.FIRECRAWLAPIKEY }}'
+            'GITHUB_TOKEN=${{ secrets.GITHUBTOKEN }}'
+          )
+          IMAGE=careercopilot.azurecr.io/career-copilot-hermes:latest
           if az containerapp show --name career-copilot-hermes --resource-group career-copilot > /dev/null 2>&1; then
             echo "Updating existing hermes app..."
-            az containerapp update $COMMON_ARGS
+            # Update reuses the ACR credentials already stored on the app;
+            # --registry-* and --env-vars are unsupported by `az containerapp update`
+            # (they break with argparse exit code 2), so use --replace-env-vars.
+            az containerapp update \
+              --name career-copilot-hermes \
+              --resource-group career-copilot \
+              --image $IMAGE \
+              --min-replicas 1 --max-replicas 1 \
+              --replace-env-vars "${ENV_ARGS[@]}"
           else
             echo "Creating hermes app..."
-            az containerapp create $COMMON_ARGS \
+            az containerapp create \
+              --name career-copilot-hermes \
+              --resource-group career-copilot \
+              --image $IMAGE \
+              --registry-server careercopilot.azurecr.io \
+              --registry-username $(az acr credential show --name careercopilot --query username -o tsv) \
+              --registry-password $(az acr credential show --name careercopilot --query "passwords[0].value" -o tsv) \
               --environment career-copilot-env \
               --target-port 8642 \
               --ingress external \
-              --cpu 1.0 --memory 2.0Gi
+              --cpu 1.0 --memory 2.0Gi \
+              --min-replicas 1 --max-replicas 1 \
+              --env-vars "${ENV_ARGS[@]}"
           fi
           echo "HERMES_FQDN=$(az containerapp show --name career-copilot-hermes --resource-group career-copilot --query properties.configuration.ingress.fqdn -o tsv)" >> "$GITHUB_ENV"
           echo "Hermes API: https://$HERMES_FQDN/v1"
