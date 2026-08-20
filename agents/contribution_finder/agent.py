@@ -96,6 +96,25 @@ def _cap_per_repo(
     return out
 
 
+def _repo_quality(meta: dict[str, Any]) -> float:
+    """Log-scaled popularity: 0 stars → 0, ~10k stars → ~1."""
+    stars = meta.get("stars", 0)
+    return min(1.0, math.log10(max(stars, 1) + 1) / 4.0)
+
+
+def _repo_health(meta: dict[str, Any], now: datetime) -> float:
+    """Recency of push + responsiveness (fewer open issues is healthier)."""
+    pushed = meta.get("pushed_at", "")
+    try:
+        days = max(0, (now - datetime.fromisoformat(pushed.replace("Z", "+00:00"))).days)
+    except (ValueError, TypeError):
+        days = 365
+    recency = max(0.0, 1.0 - days / 365.0)
+    open_issues = meta.get("open_issues", 0)
+    responsiveness = max(0.0, 1.0 - min(open_issues, 1000) / 1000.0)
+    return round(max(0.0, min(1.0, 0.7 * recency + 0.3 * responsiveness)), 2)
+
+
 class ContributionFinderAgent:
     def __init__(self, task_ctx: Any = None) -> None:
         self.ctx = task_ctx
@@ -106,6 +125,8 @@ class ContributionFinderAgent:
         self._cluster_names: list[str] = []
         self._cluster_weights: list[float] = []
         self._all_skill_tokens: list[str] = []
+        # Repo metadata cache (stars / open_issues / pushed_at) for enrichment.
+        self._repo_cache: dict[str, dict[str, Any]] = {}
 
     # ── Public API ────────────────────────────────────────────────
 
@@ -180,6 +201,61 @@ class ContributionFinderAgent:
         result = _cap_per_repo(scored, per_repo)[:profile.get("max_opportunities_per_digest", MAX_OPPS_PER_DIGEST)]
         await self._persist(result)
         return result
+
+    async def _repo_meta(self, repo: str) -> dict[str, Any]:
+        """Fetch cached repo metadata (stars / open issues / last push)."""
+        if repo in self._repo_cache:
+            return self._repo_cache[repo]
+        meta: dict[str, Any] = {}
+        try:
+            import httpx
+
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.get(
+                    f"https://api.github.com/repos/{repo}",
+                    headers={
+                        "Accept": "application/vnd.github+json",
+                        "User-Agent": "career-copilot-contribution-finder",
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                meta = {
+                    "stars": data.get("stargazers_count", 0),
+                    "open_issues": data.get("open_issues_count", 0),
+                    "pushed_at": data.get("pushed_at", ""),
+                }
+        except Exception:
+            pass  # rate limit / transient error → treat as unknown, score 0
+        self._repo_cache[repo] = meta
+        return meta
+
+    async def _enrich_repo_quality(self, top: list[dict[str, Any]]) -> None:
+        """Add repo_quality + health factors and re-blend the top candidates."""
+        if not top:
+            return
+        now = datetime.now(UTC)
+        repos = list(dict.fromkeys(s.get("repo_full_name", "") for s in top if s.get("repo_full_name")))
+        metas = {repo: await self._repo_meta(repo) for repo in repos}
+        for s in top:
+            meta = metas.get(s.get("repo_full_name", ""), {})
+            repo_q = _repo_quality(meta)
+            health = _repo_health(meta, now)
+            factors = dict(s.get("_factors") or {})
+            factors["repo"] = round(repo_q, 2)
+            factors["health"] = round(health, 2)
+            s["_factors"] = factors
+            s["_impact_score"] = round(
+                min(
+                    1.0,
+                    0.85 * s.get("_base_score", 0)
+                    + 0.10 * repo_q
+                    + 0.05 * health
+                    + s.get("_repo_signal", 0),
+                ),
+                2,
+            )
+            s["_why"] = " · ".join(f"{k} {v:.2f}" for k, v in factors.items())
 
     async def _persist(self, results: list[dict[str, Any]]) -> None:
         """Upsert discovered opportunities so feedback buttons have a target."""
@@ -310,6 +386,7 @@ class ContributionFinderAgent:
             skill_match = self._weighted_max_cosine(pvec)
             score, factors = self._compute_impact(iss, now, skill_match)
             boost = apply_repo_signal(iss, signals)
+            iss["_base_score"] = round(score, 2)
             iss["_impact_score"] = round(min(1.0, score + boost), 2)
             iss["_repo_signal"] = boost
             iss["_skill_match"] = round(skill_match, 2)
@@ -318,6 +395,9 @@ class ContributionFinderAgent:
             # Label-based effort so cards read well even before Gemini analysis.
             iss.setdefault("estimated_effort", _estimate_effort(iss))
             scored.append(iss)
+
+        scored.sort(key=lambda s: s["_impact_score"], reverse=True)
+        await self._enrich_repo_quality(scored[:30])
         return scored
 
     def _compute_impact(
@@ -332,7 +412,8 @@ class ContributionFinderAgent:
         activity (reactions + how unworked), value (label-driven impact).
         """
         try:
-            age_days = (now - datetime.fromisoformat(issue.get("created_at", "").replace("Z", "+00:00"))).days
+            created = issue.get("created_at", "").replace("Z", "+00:00")
+            age_days = (now - datetime.fromisoformat(created)).days
         except (ValueError, TypeError):
             age_days = 30
         freshness = 1.0 / math.log(max(age_days, 1) + 2)
@@ -343,12 +424,13 @@ class ContributionFinderAgent:
         pr_count = issue.get("linked_pr_count", 0)
         pr_unworked = 1.0 if pr_count == 0 else 0.6 if pr_count <= 2 else 0.2
         try:
-            last_activity = (now - datetime.fromisoformat(issue.get("updated_at", "").replace("Z", "+00:00"))).days
+            updated = issue.get("updated_at", "").replace("Z", "+00:00")
+            last_activity = (now - datetime.fromisoformat(updated)).days
         except (ValueError, TypeError):
             last_activity = 0
         activity_unworked = min(1.0, last_activity / 30.0)
         unworked = 0.6 * pr_unworked + 0.4 * activity_unworked
-        activity = 0.5 * reactions + 0.5 * unworked
+        activity = 0.4 * reactions + 0.3 * unworked + 0.3 * uncrowded
 
         labels = [lbl.lower() for lbl in (issue.get("labels") or [])]
         if "good first issue" in labels:
