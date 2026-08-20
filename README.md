@@ -70,3 +70,24 @@ python -m career_copilot serve
 
 [Architecture details →](docs/paper-tracker-design.md)
 [Implementation guide →](implementation-guide.md)
+
+## 🔥 Hermes — emergency kill switch
+
+The agentic layer runs as a **separate Azure Container App** (`career-copilot-hermes`, see
+`deploy/hermes/`). If it needs to be taken down fast (suspicious traffic, runaway cost,
+security concern), scale it to zero — no code change, the bot stays up:
+
+```bash
+az containerapp update \
+  --name career-copilot-hermes \
+  --resource-group career-copilot \
+  --min-replicas 0 --max-replicas 0
+```
+
+The bot will keep serving all slash commands; only `/ask` / bare-text (agentic) responses
+goT off until the Hermes app is brought back.
+
+> **Secrets required for the Hermes deploy**: `GOOGLEAPIKEY` (Gemini provider) and
+> `HERMESAPIKEY` (bearer key the bot uses to call the public Hermes endpoint). Add both to
+> the repository's GitHub Actions secrets before/with the first Hermes deploy, or the
+> container boots but Gemini auth fails.

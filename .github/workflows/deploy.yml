@@ -10,8 +10,62 @@ on:
   workflow_dispatch:
 
 jobs:
+  deploy-hermes:
+    runs-on: ubuntu-latest
+    env:
+      HERMES_FQDN: ""
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Login to ACR
+        run: az acr login --name careercopilot
+
+      - name: Build and push hermes image
+        run: |
+          docker build -t careercopilot.azurecr.io/career-copilot-hermes:latest -f deploy/hermes/Dockerfile .
+          docker push careercopilot.azurecr.io/career-copilot-hermes:latest
+
+      - name: Install containerapp CLI
+        run: az extension add --name containerapp --upgrade
+
+      - name: Deploy Hermes (create or update)
+        run: |
+          az containerapp create \
+            --name career-copilot-hermes \
+            --resource-group career-copilot \
+            --environment career-copilot-env \
+            --image careercopilot.azurecr.io/career-copilot-hermes:latest \
+            --registry-server careercopilot.azurecr.io \
+            --registry-username $(az acr credential show --name careercopilot --query username -o tsv) \
+            --registry-password $(az acr credential show --name careercopilot --query "passwords[0].value" -o tsv) \
+            --target-port 8642 \
+            --ingress external \
+            --min-replicas 1 --max-replicas 1 \
+            --cpu 1.0 --memory 2.0Gi \
+            --env-vars \
+              API_SERVER_ENABLED=true \
+              API_SERVER_HOST=0.0.0.0 \
+              API_SERVER_PORT=8642 \
+              API_SERVER_KEY=${{ secrets.HERMESAPIKEY }} \
+              GOOGLE_API_KEY=${{ secrets.GOOGLEAPIKEY }} \
+              DATABASE_URL=${{ secrets.DATABASEURL }} \
+              QDRANT_URL=${{ secrets.QDRANTURL }} \
+              QDRANT_API_KEY=${{ secrets.QDRANTAPIKEY }} \
+              TAVILY_API_KEY=${{ secrets.TAVILYAPIKEY }} \
+              VOYAGE_API_KEY=${{ secrets.VOYAGEAPIKEY }} \
+              FIRECRAWL_API_KEY=${{ secrets.FIRECRAWLAPIKEY }} \
+              GITHUB_TOKEN=${{ secrets.GITHUBTOKEN }}
+          echo "HERMES_FQDN=$(az containerapp show --name career-copilot-hermes --resource-group career-copilot --query properties.configuration.ingress.fqdn -o tsv)" >> "$GITHUB_ENV"
+          echo "Hermes API: https://$HERMES_FQDN/v1"
+
   deploy:
     runs-on: ubuntu-latest
+    needs: [deploy-hermes]
 
     steps:
       - uses: actions/checkout@v4
@@ -31,6 +85,11 @@ jobs:
 
       - name: Install containerapp CLI
         run: az extension add --name containerapp --upgrade
+
+      - name: Resolve Hermes FQDN
+        run: |
+          FQDN=$(az containerapp show --name career-copilot-hermes --resource-group career-copilot --query properties.configuration.ingress.fqdn -o tsv 2>/dev/null || echo "")
+          echo "HERMES_FQDN=$FQDN" >> "$GITHUB_ENV"
 
       - name: Deploy bot
         run: |
@@ -52,7 +111,9 @@ jobs:
               QDRANT_API_KEY=${{ secrets.QDRANTAPIKEY }} \
               TAVILY_API_KEY=${{ secrets.TAVILYAPIKEY }} \
               FIRECRAWL_API_KEY=${{ secrets.FIRECRAWLAPIKEY }} \
-              GITHUB_TOKEN=${{ secrets.GITHUBTOKEN }}
+              GITHUB_TOKEN=${{ secrets.GITHUBTOKEN }} \
+              HERMES_API_URL=https://${{ env.HERMES_FQDN }}/v1 \
+              HERMES_API_KEY=${{ secrets.HERMESAPIKEY }}
 
       - name: Deploy worker
         run: |
@@ -76,7 +137,9 @@ jobs:
               QDRANT_API_KEY=${{ secrets.QDRANTAPIKEY }} \
               TAVILY_API_KEY=${{ secrets.TAVILYAPIKEY }} \
               FIRECRAWL_API_KEY=${{ secrets.FIRECRAWLAPIKEY }} \
-              GITHUB_TOKEN=${{ secrets.GITHUBTOKEN }}
+              GITHUB_TOKEN=${{ secrets.GITHUBTOKEN }} \
+              HERMES_API_URL=https://${{ env.HERMES_FQDN }}/v1 \
+              HERMES_API_KEY=${{ secrets.HERMESAPIKEY }}
 
       - name: Notify
-        run: echo "Deployed bot + worker to career-copilot"
+        run: echo "Deployed bot + worker + hermes to career-copilot"
