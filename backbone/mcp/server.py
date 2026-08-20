@@ -37,6 +37,7 @@ from mcp.server.fastmcp import FastMCP  # noqa: E402
 
 from .adapters import (
     discover_professors,
+    discover_professors_web,
     load_profile,
     search_jobs,
     search_papers,
@@ -101,8 +102,8 @@ async def career_papers_search(query: str, limit: int = 5) -> dict:
         query: Free-text keyword query (e.g. "RAG evaluation").
         limit: Max papers to return (1-20, default 5).
 
-    Returns a compact list with id, title, authors, abstract excerpt,
-    publish date, and URL. Read-only.
+    Returns a compact list with id, title, authors, a short abstract excerpt,
+    year, and arXiv URL. Read-only.
     """
     return apply_policy(await search_papers(query, limit))
 
@@ -131,6 +132,11 @@ async def career_professors_search(
 
     If NO selector is given, the user's stored research interests are used as
     the topic — never ask the user to restate their interests.
+
+    When the curated index has NO faculty for a named institution (some labs
+    sit outside CSRankings — e.g. iSchool / Faculty-of-Information IR
+    researchers), call career.professors.web_search with the same institution
+    (+ topic) to find verified faculty on the web.
     Read-only.
     """
     if not (name or institution or topic):
@@ -154,6 +160,33 @@ async def career_professors_search(
         merged.append(p)
 
     return apply_policy(merged[: max(1, min(int(limit), 50))])
+
+
+@mcp.tool(name="career.professors.web_search")
+async def career_professors_web_search(
+    institution: str,
+    topic: str | None = None,
+    limit: int = 10,
+) -> dict:
+    """Find professors on the web, cross-referenced against OpenAlex.
+
+    Use this when the curated CSRankings index has no faculty for an
+    institution (e.g. iSchool / Faculty-of-Information researchers not ranked
+    by CS venues). Results carry provenance on every row:
+
+      - ``openalex`` rows are ``verified_by_scholar: true`` with the author's
+        OpenAlex profile URL (they publish at that institution on the topic).
+      - ``web`` rows come from Tavily and carry a clickable URL; they are
+        corroboration, not verified facts.
+
+    Args:
+        institution: University or city, e.g. "University of Toronto".
+        topic: Optional research area, e.g. "retrieval".
+        limit: Max results (1-20, default 10).
+
+    Read-only.
+    """
+    return apply_policy(await discover_professors_web(institution, topic, limit))
 
 
 @mcp.tool(name="career.jobs.search")

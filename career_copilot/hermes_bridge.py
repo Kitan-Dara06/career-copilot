@@ -51,7 +51,10 @@ def _default_system_prompt() -> str:
         "career.profile.get tool. Before answering questions about professor fit, "
         "paper relevance, research direction, or career planning, call career.profile.get "
         "and ground your answer in its data. Use career.papers/professors/jobs.search "
-        "when the user asks for papers, professors, or jobs. Keep replies concise."
+        "when the user asks for papers, professors, or jobs. Keep replies concise. "
+        "When listing papers or professors, use compact numbered lines and put a "
+        "clickable URL on every entry; name the source (arxiv / csrankings / "
+        "openalex / web) where relevant."
     )
     return _SYSTEM_PROMPT
 

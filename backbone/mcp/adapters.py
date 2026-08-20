@@ -21,6 +21,7 @@ from career_copilot.config.paths import DATA_DIR
 # arXiv Atom namespace for paper search parsing.
 _ARXIV_NS = "{http://www.w3.org/2005/Atom}"
 _ARXIV_API = "https://export.arxiv.org/api/query"
+_OPENALEX_API = "https://api.openalex.org"
 
 
 def _tsvector_expr(columns: str) -> str:
@@ -209,6 +210,162 @@ async def discover_professors(
     return matches[:_cap(limit)]
 
 
+def _first_inst(authorship: dict[str, Any]) -> str:
+    """First institution display name for an OpenAlex authorship, if any."""
+    insts = authorship.get("institutions") or []
+    return insts[0].get("display_name", "") if insts else ""
+
+
+async def discover_professors_web(
+    institution: str,
+    topic: str | None = None,
+    limit: int = 10,
+) -> dict[str, Any]:
+    """Find professors on the web, cross-referenced so the data is attributable.
+
+    Two independent layers, each carrying provenance on the row:
+
+    - ``openalex`` (authoritative, no key): resolves the institution via the
+      OpenAlex institutions API, then pulls its authors' works matching
+      ``topic``. Authors with the most matching works are returned with
+      ``verified_by_scholar: true`` and their OpenAlex author URL.
+    - ``web`` (Tavily, only if ``TAVILY_API_KEY`` is set): a web search for
+      faculty pages, each row tagged ``source: web`` with a clickable URL so
+      the user can corroborate. Never authoritative — labelled ``verified_:false``.
+
+    An institution that OpenAlex does not resolve yields only the web layer
+    (or an empty result), never fabricated faculty.
+    """
+    from career_copilot.config import get_settings
+
+    settings = get_settings()
+    results: list[dict[str, Any]] = []
+    resolved: dict[str, Any] = {}
+    sources = ["openalex"]
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        try:
+            resp = await client.get(
+                f"{_OPENALEX_API}/institutions",
+                params={"search": institution, "per-page": "5"},
+            )
+            resp.raise_for_status()
+            matches = (resp.json().get("results") or [])
+        except httpx.HTTPError:
+            matches = []
+
+        if matches:
+            inst = matches[0]
+            resolved = {
+                "name": inst.get("display_name", institution),
+                "openalex_id": inst.get("id", ""),
+            }
+
+            # Resolve "retrieval" precisely: only use OpenAlex concepts whose
+            # canonical name overlaps the topic — otherwise free-text picks
+            # the wrong sense (memory / biology). For known topics we pin the
+            # concept directly; for unknown topics we fall back to free-text.
+            concept_id: str | None = None
+            topic_norm = topic.lower().strip() if topic else ""
+            if topic_norm:
+                try:
+                    resp = await client.get(
+                        f"{_OPENALEX_API}/concepts",
+                        params={"search": topic_norm, "per-page": "10"},
+                    )
+                    resp.raise_for_status()
+                    for c in (resp.json().get("results") or []):
+                        canonical = (c.get("display_name") or "").lower()
+                        if topic_norm in canonical or canonical in topic_norm:
+                            concept_id = c.get("id")
+                            break
+                except httpx.HTTPError:
+                    concept_id = None
+
+            works_params: dict[str, Any] = {
+                "filter": f"institutions.id:{inst.get('id', '')}",
+                "per-page": "50",
+                "select": "display_name,authorships",
+            }
+            if concept_id:
+                works_params["filter"] += f",concepts.id:{concept_id}"
+            elif topic:
+                works_params["search"] = topic
+            try:
+                resp = await client.get(f"{_OPENALEX_API}/works", params=works_params)
+                resp.raise_for_status()
+                works = (resp.json().get("results") or [])
+            except httpx.HTTPError:
+                works = []
+
+            counts: dict[str, int] = {}
+            aff: dict[str, str] = {}
+            aid: dict[str, str] = {}
+            for work in works:
+                for au in (work.get("authorships") or []):
+                    author = au.get("author") or {}
+                    name = author.get("display_name", "")
+                    if not name:
+                        continue
+                    counts[name] = counts.get(name, 0) + 1
+                    aid.setdefault(name, author.get("id", ""))
+                    aff.setdefault(name, _first_inst(au))
+
+            for name, count in sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:limit]:
+                results.append(
+                    {
+                        "name": name,
+                        "affiliation": aff.get(name) or resolved["name"],
+                        "role_hint": "",
+                        "source": "openalex",
+                        "verified_by_scholar": True,
+                        "works_this_topic": count,
+                        "url": aid.get(name, ""),
+                    }
+                )
+
+        # Tavily web corroboration (optional; needs TAVILY_API_KEY).
+        if settings.tavily_api_key:
+            sources.append("tavily:web")
+            try:
+                query = f"{institution} {topic or ''} professor faculty".strip()
+                resp = await client.post(
+                    "https://api.tavily.com/search",
+                    json={
+                        "api_key": settings.tavily_api_key,
+                        "query": query,
+                        "max_results": max(1, min(int(limit), 5)),
+                    },
+                )
+                resp.raise_for_status()
+                for item in (resp.json().get("results") or []):
+                    results.append(
+                        {
+                            "name": "",
+                            "affiliation": institution,
+                            "role_hint": (item.get("title") or "")[:140],
+                            "source": "web",
+                            "verified_by_scholar": False,
+                            "works_this_topic": 0,
+                            "url": item.get("url", ""),
+                        }
+                    )
+            except httpx.HTTPError:
+                pass
+
+    web_limit = min(5, int(limit)) if settings.tavily_api_key else 0
+    return {
+        "institution": resolved or {"name": institution, "openalex_id": ""},
+        "query": {"institution": institution, "topic": topic},
+        "results": results[: max(1, min(int(limit), 20)) + web_limit],
+        "tavily_checked": bool(settings.tavily_api_key),
+        "provenance": {
+            "sources": sources,
+            "retrieved_at": datetime.now(UTC).isoformat(),
+        },
+    }
+
+
 def _load_yaml(name: str) -> dict[str, Any]:
     """Load a YAML file from the data directory, returning {} if missing."""
     path = DATA_DIR / name
@@ -285,13 +442,16 @@ async def search_papers(query: str, limit: int = 5) -> list[dict[str, Any]]:
             for a in entry.findall(f"{_ARXIV_NS}author")
             if a.find(f"{_ARXIV_NS}name") is not None
         ]
+        published = entry.find(f"{_ARXIV_NS}published").text
         papers.append(
             {
                 "arxiv_id": arxiv_id,
                 "title": title,
                 "authors": authors[:3],
-                "abstract": summary[:500],
-                "published": entry.find(f"{_ARXIV_NS}published").text,
+                # Short excerpt keeps `career.papers.search` output clean for chat.
+                "abstract": summary[:180] + ("…" if len(summary) > 180 else ""),
+                "published": published,
+                "year": (published or "")[:4],
                 "url": f"https://arxiv.org/abs/{arxiv_id}",
             }
         )

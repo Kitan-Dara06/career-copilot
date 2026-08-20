@@ -9,6 +9,7 @@ import respx
 
 from backbone.mcp.adapters import (
     discover_professors,
+    discover_professors_web,
     load_profile,
     search_jobs,
     search_papers,
@@ -284,7 +285,13 @@ async def test_discover_professors_name_match_is_whole_word(monkeypatch: Any) ->
         return {"rows": [("sigir", "Dimitris Plexousakis", 1.8)]}
 
     async def fake_prof_index() -> list:
-        return [{"name": "Dimitris Plexousakis", "affiliation": "University of Crete", "homepage": ""}]
+        return [
+            {
+                "name": "Dimitris Plexousakis",
+                "affiliation": "University of Crete",
+                "homepage": "",
+            }
+        ]
 
     monkeypatch.setattr(csk, "_load_institutions", fake_institutions)
     monkeypatch.setattr(csk, "_load_author_info", fake_author_info)
@@ -295,6 +302,60 @@ async def test_discover_professors_name_match_is_whole_word(monkeypatch: Any) ->
     assert matched[0]["name"] == "Dimitris Plexousakis"
     # "Usak" must not substring-match inside "Plexousakis".
     assert await discover_professors(name="Usak") == []
+
+
+async def test_discover_professors_web_openalex(monkeypatch: Any, respx_mock: Any) -> None:
+    from types import SimpleNamespace
+
+    import career_copilot.config as cfg
+
+    monkeypatch.setattr(cfg, "get_settings", lambda: SimpleNamespace(tavily_api_key=""))
+
+    openalex = "https://api.openalex.org"
+    respx_mock.get(f"{openalex}/institutions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [
+                    {"id": "https://openalex.org/I123", "display_name": "University of Toronto"}
+                ]
+            },
+        )
+    )
+    # Concept resolution: an empty result list forces the adapter to fall
+    # back to free-text, so we only need to stub one works call here.
+    respx_mock.get(f"{openalex}/concepts").mock(
+        return_value=httpx.Response(200, json={"results": []})
+    )
+    respx_mock.get(f"{openalex}/works").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "authorships": [
+                            {
+                                "author": {
+                                    "display_name": "Javed Mostafa",
+                                    "id": "https://openalex.org/A99",
+                                },
+                                "institutions": [{"display_name": "University of Toronto"}],
+                            }
+                        ]
+                    }
+                ]
+            },
+        )
+    )
+
+    result = await discover_professors_web("University of Toronto", "retrieval", limit=5)
+
+    assert result["institution"]["name"] == "University of Toronto"
+    assert result["tavily_checked"] is False
+    assert result["results"][0]["name"] == "Javed Mostafa"
+    assert result["results"][0]["source"] == "openalex"
+    assert result["results"][0]["verified_by_scholar"] is True
+    assert "openalex" in result["provenance"]["sources"]
 
 
 # ── Policy ──

@@ -26,6 +26,7 @@ mcp_servers:
         - career.profile.get
         - career.papers.search
         - career.professors.search
+        - career.professors.web_search
         - career.jobs.search
         # Planning — read side (Phase 2)
         - career.planning.get_summary
