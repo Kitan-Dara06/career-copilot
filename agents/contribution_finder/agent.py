@@ -176,6 +176,24 @@ class ContributionFinderAgent:
         await self._persist(result)
         return result
 
+    async def run_pr_discovery(self, limit: int = 5) -> list[dict[str, Any]]:
+        """Discover open PRs needing review/test help (a distinct contribution type).
+
+        Reuses the profile-derived queries but swaps ``is:issue`` for ``is:pr``,
+        limited to the top 3 queries to keep GitHub API usage bounded.
+        """
+        queries = self._build_queries()[:3]
+        all_prs: list[dict[str, Any]] = []
+        for q in queries:
+            try:
+                batch = await self._search_issues(q.replace("is:issue", "is:pr"))
+                all_prs.extend(batch)
+            except Exception as exc:
+                logger.warning("cf_pr_search_failed", error=str(exc))
+                continue
+        all_prs = _dedup_issues(all_prs)
+        return all_prs[: max(1, min(int(limit), 10))]
+
     async def run_discovery_tracked(self) -> list[dict[str, Any]]:
         """Path B: fetch issues from tracked repos only."""
         repos = self._load_tracked_repos()

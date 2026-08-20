@@ -787,6 +787,16 @@ def wire_contribution_finder(dispatcher: Dispatcher) -> None:
                 if url:
                     lines.append(f"    🔗 {url}")
                 lines.append("")
+
+            prs = await agent.run_pr_discovery(5)
+            if prs:
+                lines.append("🔎 Open PRs you could help with (review / test):")
+                for p in prs:
+                    lines.append(
+                        f"• {p.get('title', '')[:60]} — {p.get('repo_full_name', '')}"
+                    )
+                    lines.append(f"    🔗 {p.get('url', '')}")
+                    lines.append("")
             return TaskResult(task_id=task.id, success=True, output="\n".join(lines))
         except Exception as exc:
             logger.exception("cf_discovery_failed")
