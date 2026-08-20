@@ -86,9 +86,11 @@ async def career_professors_search(query: str | None = None, limit: int = 10) ->
     ``source: csrankings`` and ranked by publication activity.
 
     Args:
-        query: Optional name, affiliation, institution, and/or area
-            (e.g. "McGill retrieval"). If omitted, your stored research
-            interests are used as the default search.
+        query: Optional. When the user names a place, institution, or
+            research area (e.g. "Usak" or "McGill retrieval"), pass that
+            here. When the user does NOT name one (or is vague), call with
+            NO query — the user's stored research interests are used, so
+            never ask the user to restate their interests.
         limit: Max total results (1-50, default 10).
 
     Read-only.
