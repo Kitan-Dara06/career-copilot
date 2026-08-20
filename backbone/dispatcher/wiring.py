@@ -779,8 +779,11 @@ def wire_contribution_finder(dispatcher: Dispatcher) -> None:
                 eff = o.get("estimated_effort", "")
                 url = o.get("url", "")
                 badge = f"[{eff}] " if eff else ""
+                why = o.get("_why", "")
                 lines.append(f"{i+1}. {badge}{title}")
                 lines.append(f"    {repo} | score={score:.2f}")
+                if why:
+                    lines.append(f"    {why}")
                 if url:
                     lines.append(f"    🔗 {url}")
                 lines.append("")

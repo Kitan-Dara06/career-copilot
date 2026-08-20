@@ -242,23 +242,36 @@ class ContributionFinderAgent:
     # ── GitHub search ─────────────────────────────────────────────
 
     def _build_queries(self, topic: str | None = None) -> list[str]:
-        """Build 6 GitHub issue search queries from skill clusters."""
+        """Build GitHub issue queries from the user's actual profile.
+
+        No hand-tuned query map: one query per high-weight skill cluster
+        (top skills OR'd) plus one from research keywords. This keeps
+        ``/contrib`` aligned with the profile and adapts when it changes.
+        """
         if topic:
             return [f'{topic} is:issue is:open language:python label:"good first issue","help wanted"']
 
-        clusters = self._load_skill_clusters()
-        query_map = {
-            "agent_systems": '"multi-agent" OR "agent orchestration" OR "task routing"',
-            "rag_retrieval": "RAG OR \"retrieval-augmented\" OR \"vector database\"",
-            "llm_ops": "\"LLM\" OR \"document parsing\" OR \"context window\"",
-            "ai_ml_frameworks": "LangChain OR LlamaIndex OR \"Hugging Face\" OR AutoGen OR CrewAI",
-            "backend": "\"FastAPI\" OR asyncio OR \"async Python\"",
-            "data_engineering": "\"web scraping\" OR \"SQL\" OR \"schema\"",
-        }
-        queries = []
-        for cluster_name, terms in query_map.items():
+        clusters = sorted(
+            [c for c in self._load_skill_clusters() if c.get("weight", 0) >= 0.8],
+            key=lambda c: c.get("weight", 0),
+            reverse=True,
+        )
+        queries: list[str] = []
+        for c in clusters[:8]:
+            terms = [s for s in (c.get("skills") or [])][:4]
+            if not terms:
+                continue
+            or_terms = " OR ".join(f'"{t}"' for t in terms)
             queries.append(
-                f"({terms}) is:issue is:open language:python "
+                f"({or_terms}) is:issue is:open language:python "
+                f'label:"good first issue","help wanted"'
+            )
+
+        keywords = (_load_yaml("user_profile.yaml").get("keywords") or [])[:8]
+        if keywords:
+            kw_or = " OR ".join(f'"{k}"' for k in keywords)
+            queries.append(
+                f"({kw_or}) is:issue is:open language:python "
                 f'label:"good first issue","help wanted"'
             )
         return queries
@@ -288,7 +301,6 @@ class ContributionFinderAgent:
             embeds = await self._embed(self.ctx, EmbedInput(texts=texts[off:off + BATCH]))
             posting_vecs.extend([list(v) for v in (embeds.embeddings or [])])
         now = datetime.now(UTC)
-        preferred = profile.get("preferred_effort_buckets", ["half day", "1-2 days"])
         from backbone.tools.contribution_store import apply_repo_signal, repo_signals
 
         signals = await repo_signals()
@@ -296,26 +308,35 @@ class ContributionFinderAgent:
         for i, iss in enumerate(issues):
             pvec = posting_vecs[i] if i < len(posting_vecs) else [0.0]
             skill_match = self._weighted_max_cosine(pvec)
-            score = self._compute_impact(iss, now, preferred, skill_match)
+            score, factors = self._compute_impact(iss, now, skill_match)
             boost = apply_repo_signal(iss, signals)
-            iss["_impact_score"] = round(score + boost, 2)
+            iss["_impact_score"] = round(min(1.0, score + boost), 2)
             iss["_repo_signal"] = boost
             iss["_skill_match"] = round(skill_match, 2)
+            iss["_factors"] = factors
+            iss["_why"] = " · ".join(f"{k} {v:.2f}" for k, v in factors.items())
             # Label-based effort so cards read well even before Gemini analysis.
             iss.setdefault("estimated_effort", _estimate_effort(iss))
             scored.append(iss)
         return scored
 
     def _compute_impact(
-        self, issue: dict[str, Any], now: datetime, preferred_buckets: list[str],
+        self,
+        issue: dict[str, Any],
+        now: datetime,
         skill_match: float = 0.0,
-    ) -> float:
-        """Per-issue impact score. Skill match comes pre-computed from cosine."""
+    ) -> tuple[float, dict[str, float]]:
+        """Return (score, named factors) so results are explainable.
+
+        Factors: skill (cosine match), freshness, feasibility (effort hint),
+        activity (reactions + how unworked), value (label-driven impact).
+        """
         try:
             age_days = (now - datetime.fromisoformat(issue.get("created_at", "").replace("Z", "+00:00"))).days
         except (ValueError, TypeError):
             age_days = 30
         freshness = 1.0 / math.log(max(age_days, 1) + 2)
+
         reactions = min(issue.get("reaction_count", 0), 10) / 10.0
         comments = issue.get("comment_count", 0)
         uncrowded = 1.0 / (1.0 + comments / 5.0)
@@ -327,15 +348,46 @@ class ContributionFinderAgent:
             last_activity = 0
         activity_unworked = min(1.0, last_activity / 30.0)
         unworked = 0.6 * pr_unworked + 0.4 * activity_unworked
+        activity = 0.5 * reactions + 0.5 * unworked
+
         labels = [lbl.lower() for lbl in (issue.get("labels") or [])]
-        label_bonus = 0.0
-        if "good first issue" in labels: label_bonus += 0.15
-        if "help wanted" in labels: label_bonus += 0.10
-        if "bug" in labels: label_bonus += 0.05
-        if "documentation" in labels: label_bonus += 0.05
-        label_bonus = min(label_bonus, 0.30)
-        raw = freshness * 0.30 + reactions * 0.10 + skill_match * 0.25 + uncrowded * 0.05 + unworked * 0.20 + label_bonus * 0.10
-        return min(raw, 1.0)
+        if "good first issue" in labels:
+            feasibility = 0.9
+        elif "documentation" in labels:
+            feasibility = 0.8
+        elif "help wanted" in labels:
+            feasibility = 0.7
+        elif "bug" in labels:
+            feasibility = 0.6
+        else:
+            feasibility = 0.5
+
+        value = 0.4
+        if "help wanted" in labels:
+            value += 0.2
+        if "bug" in labels:
+            value += 0.15
+        if "enhancement" in labels or "feature" in labels:
+            value += 0.15
+        if "good first issue" in labels:
+            value += 0.05
+        value = min(value, 1.0)
+
+        total = (
+            0.30 * skill_match
+            + 0.20 * freshness
+            + 0.15 * feasibility
+            + 0.15 * activity
+            + 0.20 * value
+        )
+        factors = {
+            "skill": round(skill_match, 2),
+            "freshness": round(freshness, 2),
+            "feasibility": round(feasibility, 2),
+            "activity": round(activity, 2),
+            "value": round(value, 2),
+        }
+        return min(total, 1.0), factors
 
     def _weighted_max_cosine(self, posting_vec: list[float]) -> float:
         """Per-cluster weighted max cosine."""
