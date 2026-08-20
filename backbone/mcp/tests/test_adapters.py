@@ -201,7 +201,7 @@ async def test_discover_professors_filters_institution_and_area(monkeypatch: Any
     monkeypatch.setattr(csk, "_load_author_info", fake_author_info)
     monkeypatch.setattr(csk, "_load_prof_index", fake_prof_index)
 
-    rows = await discover_professors("professors at McGill doing retrieval")
+    rows = await discover_professors(institution="McGill", topic="retrieval")
 
     assert len(rows) == 1
     assert rows[0]["name"] == "Jane McGill Prof"
@@ -225,9 +225,76 @@ async def test_discover_professors_no_institution_returns_top_area(monkeypatch: 
     monkeypatch.setattr(csk, "_load_author_info", fake_author_info)
     monkeypatch.setattr(csk, "_load_prof_index", fake_prof_index)
 
-    rows = await discover_professors("professors doing retrieval")
+    rows = await discover_professors(topic="retrieval")
     assert len(rows) == 1
     assert rows[0]["adjusted_count"] == 12.0
+
+
+async def test_discover_professors_by_name(monkeypatch: Any) -> None:
+    import backbone.tools.csrankings as csk
+
+    async def fake_institutions() -> dict:
+        return {}
+
+    async def fake_author_info() -> dict:
+        return {"rows": [("nips", "Yoshua Bengio", 60.0)]}
+
+    async def fake_prof_index() -> list:
+        return [
+            {"name": "Yoshua Bengio", "affiliation": "University of Montreal", "homepage": ""},
+            {"name": "Other Prof", "affiliation": "X", "homepage": ""},
+        ]
+
+    monkeypatch.setattr(csk, "_load_institutions", fake_institutions)
+    monkeypatch.setattr(csk, "_load_author_info", fake_author_info)
+    monkeypatch.setattr(csk, "_load_prof_index", fake_prof_index)
+
+    rows = await discover_professors(name="Yoshua Bengio")
+    assert len(rows) == 1
+    assert rows[0]["name"] == "Yoshua Bengio"
+    assert rows[0]["adjusted_count"] == 60.0
+
+
+async def test_discover_professors_unknown_institution_returns_empty(monkeypatch: Any) -> None:
+    import backbone.tools.csrankings as csk
+
+    async def fake_institutions() -> dict:
+        return {}
+
+    async def fake_author_info() -> dict:
+        return {"rows": [("sigir", "Top IR Prof", 12.0)]}
+
+    async def fake_prof_index() -> list:
+        return [{"name": "Top IR Prof", "affiliation": "Usak University", "homepage": ""}]
+
+    monkeypatch.setattr(csk, "_load_institutions", fake_institutions)
+    monkeypatch.setattr(csk, "_load_author_info", fake_author_info)
+    monkeypatch.setattr(csk, "_load_prof_index", fake_prof_index)
+
+    assert await discover_professors(institution="Usak") == []
+
+
+async def test_discover_professors_name_match_is_whole_word(monkeypatch: Any) -> None:
+    import backbone.tools.csrankings as csk
+
+    async def fake_institutions() -> dict:
+        return {}
+
+    async def fake_author_info() -> dict:
+        return {"rows": [("sigir", "Dimitris Plexousakis", 1.8)]}
+
+    async def fake_prof_index() -> list:
+        return [{"name": "Dimitris Plexousakis", "affiliation": "University of Crete", "homepage": ""}]
+
+    monkeypatch.setattr(csk, "_load_institutions", fake_institutions)
+    monkeypatch.setattr(csk, "_load_author_info", fake_author_info)
+    monkeypatch.setattr(csk, "_load_prof_index", fake_prof_index)
+
+    matched = await discover_professors(name="Plexousakis")
+    assert len(matched) == 1
+    assert matched[0]["name"] == "Dimitris Plexousakis"
+    # "Usak" must not substring-match inside "Plexousakis".
+    assert await discover_professors(name="Usak") == []
 
 
 # ── Policy ──

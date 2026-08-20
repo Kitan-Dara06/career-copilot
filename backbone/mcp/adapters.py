@@ -7,6 +7,7 @@ structure. Adapters do not perform writes and do not leak secrets.
 from __future__ import annotations
 
 import hashlib
+import unicodedata
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote_plus
@@ -66,13 +67,33 @@ def should_discover(query: str) -> bool:
     return any(kw in q for kw in _AREA_KEYWORDS)
 
 
-async def discover_professors(query: str, limit: int = 10) -> list[dict[str, Any]]:
-    """Find professors from CSRankings matching an institution and/or area.
+def _fold(value: str) -> str:
+    """Fold diacritics + case so "Usak" matches "Uşak", "Munchen" → "München" etc."""
+    return "".join(
+        c for c in unicodedata.normalize("NFKD", value) if not unicodedata.combining(c)
+    ).lower()
 
-    Query tokens are matched against CSRankings' institution list (e.g.
-    "McGill" → "McGill University") and area keywords ("retrieval" →
-    inforet). Results are ranked by adjusted publication count. The upstream
-    CSVs are downloaded once per process and cached.
+
+async def discover_professors(
+    name: str | None = None,
+    institution: str | None = None,
+    topic: str | None = None,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    """Find professors from CSRankings using structured selectors.
+
+    One or more of ``name`` / ``institution`` / ``topic`` may be set; each is
+    matched deterministically instead of guessing intent from free text:
+
+    - ``name`` — a specific professor (e.g. "Yoshua Bengio"), matched by
+      whole-word, case- and diacritic-folded comparison; returned directly.
+    - ``institution`` — a university or city (e.g. "Usak", "McGill"). If it
+      is NOT in the CSRankings institution index, the result is an EMPTY
+      list — never a fallback to generic top professors.
+    - ``topic`` — a research area; maps to CSRankings parent areas via
+      ``_AREA_KEYWORDS``. When absent, every CS area is considered.
+
+    The upstream CSVs are downloaded once per process and cached.
     """
     from backbone.tools.csrankings import (
         CONFERENCE_TO_PARENT,
@@ -81,52 +102,102 @@ async def discover_professors(query: str, limit: int = 10) -> list[dict[str, Any
         _load_prof_index,
     )
 
-    q_lower = query.lower()
-    tokens = [
-        t.strip(",.!?;:'\"()[]")
-        for t in query.split()
-        if len(t.strip(",.!?;:'\"()[]")) > 2
-    ]
+    fold = _fold
 
+    def _tokens(value: str | None) -> list[str]:
+        if not value:
+            return []
+        return [
+            t.strip(" ,.!?;:'\"()[]")
+            for t in value.split()
+            if len(t.strip(" ,.!?;:'\"()[]")) > 2
+        ]
+
+    def _cap(n: int) -> int:
+        return max(1, min(int(n), 20))
+
+    name_tokens = _tokens(name)
+    inst_tokens = _tokens(institution)
+
+    # Research-topic hint → CSRankings parent areas.
     areas: set[str] = set()
-    for kw, area in _AREA_KEYWORDS.items():
-        if kw in q_lower:
-            areas.add(area)
-    if not areas:
-        areas = set(_DEFAULT_DISCOVER_AREAS)
+    if topic:
+        folded_topic = fold(topic)
+        for kw, area in _AREA_KEYWORDS.items():
+            if kw in folded_topic:
+                areas.add(area)
 
     institutions = await _load_institutions()
-    inst_names = sorted(
-        (n for n in institutions if any(t.lower() in n.lower() for t in tokens)),
-        key=len,
-        reverse=True,
-    )
+    inst_names: list[str] = []
+    if inst_tokens:
+        inst_names = sorted(
+            (n for n in institutions if any(fold(t) in fold(n) for t in inst_tokens)),
+            key=len,
+            reverse=True,
+        )
+        if not inst_names:
+            # A named place we do not track — honest empty, not a top-N dump.
+            return []
 
     author_info = await _load_author_info()
     prof_index = await _load_prof_index()
 
-    # Adjusted publication count per author, limited to hinted areas.
+    # Adjusted pub counts per author. ``adjusted_all`` spans every venue for
+    # ranking a specific person; ``adjusted`` is scoped by ``areas`` and falls
+    # back to all venues when the topic maps to no area.
+    adjusted_all: dict[str, float] = {}
     adjusted: dict[str, float] = {}
-    for row_area, name, adj in author_info["rows"]:
+    for row_area, pname, adj in author_info["rows"]:
         parent = CONFERENCE_TO_PARENT.get(row_area)
-        if parent is None or parent not in areas:
+        if parent is None:
             continue
-        adjusted[name] = adjusted.get(name, 0.0) + adj
+        adjusted_all[pname] = adjusted_all.get(pname, 0.0) + adj
+        if not areas or parent in areas:
+            adjusted[pname] = adjusted.get(pname, 0.0) + adj
 
+    def _affiliation(prof_row: dict[str, Any]) -> str:
+        return (prof_row.get("affiliation") or "").strip()
+
+    # 1) Specific person-name request → return that person directly.
+    if name_tokens:
+        matches: list[dict[str, Any]] = []
+        for prof_row in prof_index:
+            pname = prof_row.get("name", "")
+            affiliation = _affiliation(prof_row)
+            if not pname or not affiliation:
+                continue
+            if inst_names and not any(fold(inst) in fold(affiliation) for inst in inst_names):
+                continue
+            words = {fold(w) for w in pname.split()}
+            if not words or not all(any(fold(t) == w for w in words) for t in name_tokens):
+                continue
+            matches.append(
+                {
+                    "name": pname,
+                    "affiliation": affiliation,
+                    "homepage": prof_row.get("homepage", "") or "",
+                    "source": "csrankings",
+                    "adjusted_count": round(adjusted_all.get(pname, 0.0), 2),
+                }
+            )
+        matches.sort(key=lambda m: m["adjusted_count"], reverse=True)
+        return matches[:_cap(limit)]
+
+    # 2) Institution and/or topic search.
     matches: list[dict[str, Any]] = []
     for prof_row in prof_index:
-        name = prof_row.get("name", "")
-        affiliation = prof_row.get("affiliation", "") or ""
-        if not name or not affiliation:
+        pname = prof_row.get("name", "")
+        affiliation = _affiliation(prof_row)
+        if not pname or not affiliation:
             continue
-        if inst_names and not any(inst in affiliation for inst in inst_names):
+        if inst_names and not any(fold(inst) in fold(affiliation) for inst in inst_names):
             continue
-        adj = adjusted.get(name, 0.0)
+        adj = adjusted.get(pname, 0.0)
         if adj <= 0:
             continue
         matches.append(
             {
-                "name": name,
+                "name": pname,
                 "affiliation": affiliation,
                 "homepage": prof_row.get("homepage", "") or "",
                 "source": "csrankings",
@@ -135,7 +206,7 @@ async def discover_professors(query: str, limit: int = 10) -> list[dict[str, Any
         )
 
     matches.sort(key=lambda m: m["adjusted_count"], reverse=True)
-    return matches[: max(1, min(int(limit), 20))]
+    return matches[:_cap(limit)]
 
 
 def _load_yaml(name: str) -> dict[str, Any]:

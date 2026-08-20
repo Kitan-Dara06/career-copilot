@@ -41,7 +41,6 @@ from .adapters import (
     search_jobs,
     search_papers,
     search_professors,
-    should_discover,
 )
 from .planning import (
     get_active_workspace_id,
@@ -99,30 +98,42 @@ async def career_papers_search(query: str, limit: int = 5) -> dict:
 
 
 @mcp.tool(name="career.professors.search")
-async def career_professors_search(query: str | None = None, limit: int = 10) -> dict:
+async def career_professors_search(
+    name: str | None = None,
+    institution: str | None = None,
+    topic: str | None = None,
+    limit: int = 10,
+) -> dict:
     """Search professors — your watchlist first, then CSRankings faculty.
 
-    Watchlist matches are tagged ``source: watchlist``. If the query names
-    an institution and/or research area (e.g. "McGill doing retrieval"),
-    CSRankings faculty matching both are returned too, tagged
-    ``source: csrankings`` and ranked by publication activity.
+    Watchlist matches are tagged ``source: watchlist``. CSRankings discovery
+    takes structured selectors — extract what the user named: a PERSON goes in
+    ``name``, a UNIVERSITY/CITY in ``institution``, a research AREA in
+    ``topic``. Combine them when the user does (e.g. institution="McGill",
+    topic="retrieval").
 
     Args:
-        query: Optional. When the user names a place, institution, or
-            research area (e.g. "Usak" or "McGill retrieval"), pass that
-            here. When the user does NOT name one (or is vague), call with
-            NO query — the user's stored research interests are used, so
-            never ask the user to restate their interests.
+        name: Optional professor name, e.g. "Yoshua Bengio".
+        institution: Optional university or city, e.g. "Usak", "McGill".
+            If named but absent from our faculty index, no faculty match.
+        topic: Optional research area, e.g. "retrieval", "agent memory".
         limit: Max total results (1-50, default 10).
 
+    If NO selector is given, the user's stored research interests are used as
+    the topic — never ask the user to restate their interests.
     Read-only.
     """
-    if not (query and query.strip()):
-        query = _profile_query_default()
-    watchlist = await search_professors(query, limit)
-    discovered: list[dict] = []
-    if should_discover(query):
-        discovered = await discover_professors(query, limit)
+    if not (name or institution or topic):
+        topic = _profile_query_default()
+
+    q_part = " ".join(x for x in (name, institution, topic) if x)
+    watchlist = await search_professors(q_part, limit)
+    discovered = await discover_professors(
+        name=name,
+        institution=institution,
+        topic=topic,
+        limit=limit,
+    )
 
     merged: list[dict] = [{"source": "watchlist", **p} for p in watchlist]
     seen = {p["name"].lower() for p in merged}
