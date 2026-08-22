@@ -175,7 +175,7 @@ def _is_allowed(update: Update) -> bool:
     return not (allowed_ids and chat_id and allowed_ids != chat_id)
 
 
-async def _hermes_respond(msg: Any, chat_id: str, text: str) -> None:
+async def _hermes_respond(msg: Any, chat_id: str, text: str, user_id: str) -> None:
     """Run a Hermes request and reply when done.
 
     Runs in a background task so a slow agent loop does not block the
@@ -187,7 +187,7 @@ async def _hermes_respond(msg: Any, chat_id: str, text: str) -> None:
 
     bridge = get_bridge()
     try:
-        response = await bridge.submit(text, chat_id=chat_id)
+        response = await bridge.submit(text, chat_id=chat_id, user_id=user_id)
     except asyncio.CancelledError:
         raise
     except HermesBridgeError as exc:
@@ -212,13 +212,14 @@ async def _ask_hermes(update: Update, context: ContextTypes.DEFAULT_TYPE, text: 
         return
 
     chat_id = _chat_id(update)
+    user_id = str(update.effective_user.id) if update.effective_user else "unknown"
     existing = _hermes_runs.get(chat_id)
     if existing is not None and not existing.done():
         await msg.reply_text("Still working on your previous request…")
         return
 
     await msg.reply_text("Thinking…")
-    task = asyncio.create_task(_hermes_respond(msg, chat_id, text.strip()))
+    task = asyncio.create_task(_hermes_respond(msg, chat_id, text.strip(), user_id))
     _hermes_runs[chat_id] = task
 
 

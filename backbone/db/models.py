@@ -289,6 +289,72 @@ class PromptRun(Base):
     __table_args__ = (Index("idx_prompt_runs_lookup", "agent", "prompt_name", "ts"),)
 
 
+class HermesRun(Base):
+    """One Hermes agent run — a single free-form /ask (or plain-text) turn.
+
+    Written by ``career_copilot.hermes_bridge`` after each call to the Hermes
+    API server (hermes-harness-design.md §15). Tool-level detail lands in
+    ``hermes_tool_calls`` at the MCP boundary.
+    """
+
+    __tablename__ = "hermes_runs"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    user_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    chat_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=text("now()"), nullable=False
+    )
+    ended_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    model: Mapped[str | None] = mapped_column(String(100))
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer)
+    total_tokens: Mapped[int | None] = mapped_column(Integer)
+    cost_usd: Mapped[float | None] = mapped_column(Numeric(10, 6))
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, comment="success | error | timeout"
+    )
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    finish_reason: Mapped[str | None] = mapped_column(String(30))
+    final_answer: Mapped[str | None] = mapped_column(Text)
+    error: Mapped[str | None] = mapped_column(Text)
+    extra_metadata: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+
+    __table_args__ = (
+        Index("idx_hermes_runs_lookup", "user_id", "started_at"),
+        Index("idx_hermes_runs_chat", "chat_id", "started_at"),
+    )
+
+
+class HermesToolCall(Base):
+    """A tool invocation Hermes made through the career_copilot MCP server.
+
+    ``run_id`` is null today: the OpenAI-compatible chat/completions response
+    does not expose the agent's internal tool transcript, but the MCP server
+    still sees every call Hermes makes to our tools (name, args, latency,
+    outcome) — enough for tool-usage dashboards (§15).
+    """
+
+    __tablename__ = "hermes_tool_calls"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    run_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    chat_id: Mapped[str | None] = mapped_column(String(100))
+    tool_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    args: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    output_excerpt: Mapped[str | None] = mapped_column(Text)
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    outcome: Mapped[str] = mapped_column(
+        String(20), nullable=False, comment="success | error"
+    )
+    ts: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=text("now()"), nullable=False
+    )
+
+    __table_args__ = (Index("idx_hermes_tool_calls_lookup", "tool_name", "ts"),)
+
+
 # ── Job Hunter tables (§12 of job-hunter-design) ─────────────────────────────
 
 

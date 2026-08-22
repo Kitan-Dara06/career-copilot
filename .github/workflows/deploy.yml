@@ -179,5 +179,30 @@ jobs:
               --env-vars "${ENV_ARGS[@]}"
           fi
 
+      - name: Configure observability (Log Analytics)
+        run: |
+          RG=career-copilot
+          WS=career-copilot-logs
+          if ! az monitor log-analytics workspace show --resource-group "$RG" --workspace-name "$WS" -o none 2>/dev/null; then
+            az monitor log-analytics workspace create --resource-group "$RG" --workspace-name "$WS" --location germanywestcentral -o none
+          fi
+          WS_CUSTOMER_ID=$(az monitor log-analytics workspace show --resource-group "$RG" --workspace-name "$WS" --query customerId -o tsv)
+          WS_KEY=$(az monitor log-analytics workspace get-shared-keys --resource-group "$RG" --workspace-name "$WS" --query primarySharedKey -o tsv)
+          az containerapp env update \
+            --name career-copilot-env \
+            --resource-group "$RG" \
+            --logs-destination log-analytics \
+            --logs-workspace-id "$WS_CUSTOMER_ID" \
+            --logs-workspace-key "$WS_KEY" -o none
+          WS_ID=$(az monitor log-analytics workspace show --resource-group "$RG" --workspace-name "$WS" --query id -o tsv)
+          for app in career-copilot-bot career-copilot-worker career-copilot-hermes; do
+            APP_ID=$(az containerapp show --name "$app" --resource-group "$RG" --query id -o tsv)
+            az monitor diagnostic-settings create \
+              --name containerapp-metrics \
+              --resource "$APP_ID" \
+              --workspace "$WS_ID" \
+              --metrics '[{"category":"AllMetrics","enabled":true}]' -o none
+          done
+
       - name: Notify
         run: echo "Deployed bot + worker + hermes to career-copilot"

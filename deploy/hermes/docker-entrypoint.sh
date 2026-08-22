@@ -13,7 +13,7 @@ model:
   provider: gemini
   base_url: https://generativelanguage.googleapis.com/v1beta
 memory:
-  memory_enabled: false
+  memory_enabled: true
 agent:
   max_turns: 90
   disabled_toolsets:

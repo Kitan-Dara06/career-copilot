@@ -66,7 +66,50 @@ from .planning_writes import (
 )
 from .policy import apply_policy
 
-mcp = FastMCP("career-copilot")
+mcp = _LoggingFastMCP("career-copilot")
+
+
+class _LoggingFastMCP(FastMCP):
+    """FastMCP that records every tool call to ``hermes_tool_calls`` (§15).
+
+    Tool-level observability lives here because this server is where Hermes's
+    tool invocations are actually observable: name, args, latency, outcome.
+    ``run_id`` stays NULL until Hermes run events are wired up (its
+    chat/completions response does not expose the internal tool transcript).
+    """
+
+    async def call_tool(
+        self, name: str, arguments: dict[str, object] | None
+    ) -> object:
+        import time as _time
+
+        from backbone.hermes_observability import (
+            HermesToolCall,
+            spawn_log_tool_call,
+            summarize,
+            summarize_args,
+        )
+
+        started = _time.perf_counter()
+        result: object = None
+        exc_text: str | None = None
+        try:
+            result = await super().call_tool(name, arguments)
+            return result
+        except Exception as exc:
+            exc_text = f"{type(exc).__name__}: {exc}"
+            raise
+        finally:
+            latency_ms = int((_time.perf_counter() - started) * 1000)
+            spawn_log_tool_call(
+                HermesToolCall(
+                    tool_name=name,
+                    args=summarize_args(dict(arguments or {})),
+                    output_excerpt=summarize(exc_text if exc_text is not None else result),
+                    latency_ms=latency_ms,
+                    outcome="error" if exc_text is not None else "success",
+                )
+            )
 
 
 def _profile_query_default() -> str:

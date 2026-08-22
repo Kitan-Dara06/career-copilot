@@ -127,6 +127,7 @@ class HermesBridge:
         message: str,
         *,
         chat_id: str = "default",
+        user_id: str = PLANNING_USER,
         system_prompt: str | None = None,
         timeout: float = 120.0,
     ) -> str:
@@ -134,11 +135,13 @@ class HermesBridge:
 
         The per-chat history is sent with every request (the API server is
         stateless) and updated with the exchange on success. Emits an OTel
-        span ``hermes.submit`` with model, chat, and history size.
+        span ``hermes.submit`` with model, chat, and history size, and
+        persists a ``hermes_runs`` row (§15) fire-and-forget.
 
         Args:
             message: The user's latest message.
             chat_id: Conversation key; isolates history per chat.
+            user_id: Who is asking (used for run-level attribution).
             system_prompt: Optional system instruction for this turn.
             timeout: HTTP timeout in seconds. The agent loop can take a while.
 
@@ -149,8 +152,20 @@ class HermesBridge:
             HermesBridgeError: If the API is unreachable, misconfigured, or
                 returns no content.
         """
-        from backbone.observability import get_tracer
+        from datetime import UTC, datetime
+        from uuid import uuid4
 
+        from backbone.observability import (
+            LLM_REQUEST_MODEL,
+            LLM_RESPONSE_FINISH,
+            LLM_USAGE_INPUT,
+            LLM_USAGE_OUTPUT,
+            get_tracer,
+        )
+        from backbone.hermes_observability import HermesRun, spawn_log_run
+
+        run_id = uuid4().hex
+        started_at = datetime.now(UTC)
         url = self._settings.hermes_api_url.rstrip("/") + "/chat/completions"
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if self._settings.hermes_api_key:
@@ -179,19 +194,59 @@ class HermesBridge:
 
         tracer = get_tracer("hermes_bridge")
         with tracer.start_as_current_span("hermes.submit") as span:
+            span.set_attribute("agent", "hermes")
+            span.set_attribute("command", "free_form")
+            span.set_attribute("hermes.run_id", run_id)
             span.set_attribute("hermes.model", self._settings.hermes_model)
+            span.set_attribute(LLM_REQUEST_MODEL, self._settings.hermes_model)
             span.set_attribute("hermes.chat_id", chat_id)
             span.set_attribute("hermes.history_len", len(history))
+
+            status = "success"
+            error: str | None = None
+            ended_at: datetime | None = None
             try:
                 async with httpx.AsyncClient(timeout=timeout) as client:
                     resp = await client.post(url, json=payload, headers=headers)
             except httpx.HTTPError as exc:
-                raise HermesBridgeError(f"Hermes API unreachable: {exc}") from exc
+                status = "timeout" if isinstance(exc, httpx.TimeoutException) else "error"
+                error = f"Hermes API unreachable: {exc}"
+                ended_at = datetime.now(UTC)
+                span.set_attribute("hermes.status", status)
+                spawn_log_run(
+                    HermesRun(
+                        run_id=run_id,
+                        user_id=user_id,
+                        chat_id=chat_id,
+                        started_at=started_at,
+                        ended_at=ended_at,
+                        model=self._settings.hermes_model,
+                        status=status,
+                        latency_ms=int((ended_at - started_at).total_seconds() * 1000),
+                        error=error,
+                    )
+                )
+                raise HermesBridgeError(error) from exc
 
             if resp.status_code != 200:
-                raise HermesBridgeError(
-                    f"Hermes API returned {resp.status_code}: {resp.text[:300]}"
+                status = "error"
+                error = f"Hermes API returned {resp.status_code}: {resp.text[:300]}"
+                ended_at = datetime.now(UTC)
+                span.set_attribute("hermes.status", status)
+                spawn_log_run(
+                    HermesRun(
+                        run_id=run_id,
+                        user_id=user_id,
+                        chat_id=chat_id,
+                        started_at=started_at,
+                        ended_at=ended_at,
+                        model=self._settings.hermes_model,
+                        status=status,
+                        latency_ms=int((ended_at - started_at).total_seconds() * 1000),
+                        error=error,
+                    )
                 )
+                raise HermesBridgeError(error)
 
             try:
                 data = resp.json()
@@ -205,6 +260,41 @@ class HermesBridge:
                 raise HermesBridgeError("Hermes API returned empty content")
 
             span.set_attribute("hermes.output_len", len(content))
+            span.set_attribute("hermes.status", "success")
+
+            # §15 run-record fields available from the OpenAI-compatible
+            # response: resolved model, usage tokens, finish reason.
+            model = data.get("model") or self._settings.hermes_model
+            usage = data.get("usage") or {}
+            prompt_tokens = usage.get("prompt_tokens")
+            completion_tokens = usage.get("completion_tokens")
+            total_tokens = usage.get("total_tokens")
+            finish_reason = data.get("choices", [{}])[0].get("finish_reason")
+            if prompt_tokens:
+                span.set_attribute(LLM_USAGE_INPUT, prompt_tokens)
+            if completion_tokens:
+                span.set_attribute(LLM_USAGE_OUTPUT, completion_tokens)
+            if finish_reason:
+                span.set_attribute(LLM_RESPONSE_FINISH, finish_reason)
+
+            ended_at = datetime.now(UTC)
+            spawn_log_run(
+                HermesRun(
+                    run_id=run_id,
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    started_at=started_at,
+                    ended_at=ended_at,
+                    model=model,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=total_tokens,
+                    status=status,
+                    latency_ms=int((ended_at - started_at).total_seconds() * 1000),
+                    finish_reason=finish_reason,
+                    final_answer=content,
+                )
+            )
 
         # Persist the exchange so a follow-up ("yes") has context.
         history.append({"role": "user", "content": message})
