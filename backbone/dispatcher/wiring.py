@@ -74,6 +74,14 @@ def _line(value: str) -> str:
     return clean[:200] if clean else ""
 
 
+def _fmt_duration(seconds: float) -> str:
+    """Render a duration compactly, e.g. 42s / 7m 42s."""
+    seconds = max(0, int(seconds))
+    if seconds < 60:
+        return f"{seconds}s"
+    return f"{seconds // 60}m {seconds % 60}s"
+
+
 def wire_paper_tracker(dispatcher: Dispatcher) -> None:
     """Register all Paper Tracker commands with the given dispatcher."""
     from agents.paper_tracker.agent import PaperTrackerAgent
@@ -164,6 +172,7 @@ def wire_paper_tracker(dispatcher: Dispatcher) -> None:
             )
 
         lines = ["Professor Discovery", ""]
+        seed_rows = 0
         for i, c in enumerate(candidates[:10], 1):
             name = c.get("name", "Unknown")
             position = _clean_text(c.get("position", ""))
@@ -187,14 +196,38 @@ def wire_paper_tracker(dispatcher: Dispatcher) -> None:
                 entry.append(f"   Location: {country}")
             if focus:
                 entry.append(f"   Focus: {focus}")
-            entry.append(
-                f"   {papers} papers | {cit} citations" f" | h={h_index} | match {sim}"
-            )
+            if c.get("seed_source") == "csrankings":
+                # CSRankings seeds have no S2 paper cluster by design, so the
+                # stats line below would read as all-zero — label it instead.
+                seed_rows += 1
+                entry.append("   CSRankings seed — paper stats not enriched")
+            else:
+                entry.append(
+                    f"   {papers} papers | {cit} citations" f" | h={h_index} | match {sim}"
+                )
             if homepage:
                 entry.append(f"   {_shorten_url(homepage)}")
             if co_workers:
                 entry.append(f"   Co-researchers: {', '.join(co_workers)}")
             lines.append("\n".join(entry))
+
+        stats = getattr(agent, "last_discover_stats", None) or {}
+        total_s = float(stats.get("total_s", 0) or 0)
+        s2_failed = int(stats.get("s2_failed", 0) or 0)
+        s2_queries = int(stats.get("s2_queries", 0) or 0)
+        if total_s or s2_failed:
+            footer = [f"\n⏱ Discovery took {_fmt_duration(total_s)}"]
+            if s2_failed:
+                footer.append(
+                    f"⚠ Semantic Scholar rate-limited {s2_failed}/{s2_queries} queries — "
+                    "results lean on CSRankings seeds (empty paper stats)"
+                )
+            if seed_rows:
+                footer.append(
+                    f"ℹ {seed_rows} seed row(s): verified via homepage/LLM, but paper "
+                    "counts need S2 data"
+                )
+            lines.append("\n".join(footer))
         return TaskResult(task_id=task.id, success=True, output="\n".join(lines))
 
     async def handle_watch(task: Task) -> TaskResult:

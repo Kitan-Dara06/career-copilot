@@ -189,6 +189,18 @@ class PaperTrackerAgent:
         combined citation + similarity score.
         """
         logger.info("discover_start")
+        import time as _time
+
+        # Per-run stats surfaced in the /discover footer (timing + S2 health).
+        self.last_discover_stats: dict[str, object] = {
+            "total_s": 0.0,
+            "s2_queries": 0,
+            "s2_failed": 0,
+            "s2_seed_count": 0,
+            "scored_count": 0,
+            "verified_count": 0,
+        }
+        _t0 = _time.perf_counter()
         keywords = await self._get_user_keywords()
         kw_list = [k.strip() for k in keywords.split(",") if k.strip()][:5]
         # Build the *search* query pool: user-configured interests + canonical
@@ -267,10 +279,12 @@ class PaperTrackerAgent:
         # (they have no data dependency), then merge seed profs into the verify
         # pool below.
         all_papers: dict[str, Any] = {}  # paper_id → paper, deduplicated
+        s2_stats = {"queries": 0, "failed": 0, "consecutive_429": 0}
 
         async def _search_s2() -> None:
             for kw in search_pool:
                 query = kw[:100]
+                s2_stats["queries"] += 1
                 try:
                     s2_out = await search_papers(
                         self.ctx,
@@ -279,14 +293,41 @@ class PaperTrackerAgent:
                     for p in s2_out.papers:
                         if p.paper_id not in all_papers:
                             all_papers[p.paper_id] = p
+                    s2_stats["consecutive_429"] = 0
                     logger.info("discover_s2_search", keyword=kw[:30], found=len(s2_out.papers))
                 except Exception as exc:
-                    logger.warning("discover_s2_search_failed", keyword=kw[:30], error=str(exc))
-                    print(f"[discover] S2 search failed for '{kw[:30]}': {exc}")
+                    s2_stats["failed"] += 1
+                    if "429" in str(exc):
+                        s2_stats["consecutive_429"] += 1
+                    else:
+                        s2_stats["consecutive_429"] = 0
+                    logger.warning(
+                        "discover_s2_search_failed", keyword=kw[:30], error=str(exc)[:200]
+                    )
+                    print(f"[discover] S2 search failed for '{kw[:30]}': {str(exc)[:120]}")
+                    # S2 429s against a shared/unauth IP can persist for minutes;
+                    # three consecutive rate-limit failures means the quota is
+                    # gone for this run — stop burning time and keep the papers
+                    # we already have (the CSRankings seed path still runs).
+                    if s2_stats["consecutive_429"] >= 3:
+                        print("[discover] S2 rate-limited 3x in a row — aborting S2 search")
+                        break
                     continue
                 await asyncio.sleep(1.5)  # Respect S2 rate limits (~1 req/sec safe margin)
 
         await asyncio.gather(_search_s2(), _fetch_csrankings_seed())
+
+        _t_s2 = _time.perf_counter()
+        self.last_discover_stats["s2_queries"] = s2_stats["queries"]
+        self.last_discover_stats["s2_failed"] = s2_stats["failed"]
+        self.last_discover_stats["s2_seed_count"] = len(csrankings_seed)
+        logger.info(
+            "discover_phase_done",
+            phase="s2_search",
+            duration_s=round(_t_s2 - _t0, 1),
+            s2_failed=s2_stats["failed"],
+            s2_queries=s2_stats["queries"],
+        )
 
         papers = list(all_papers.values())
         print(
@@ -294,6 +335,7 @@ class PaperTrackerAgent:
             f"+ {len(csrankings_seed)} CSRankings seed profs"
         )
         if not papers and not csrankings_seed:
+            self.last_discover_stats["total_s"] = round(_time.perf_counter() - _t0, 1)
             return []
 
         # Step 2: Batch citation data (also fetches abstracts)
@@ -331,6 +373,13 @@ class PaperTrackerAgent:
             if any(w in (p.title + (p.abstract or "")).lower() for w in relevant_words)
         ]
         print(f"[discover] {len(batch_papers)} papers after field filter")
+        logger.info(
+            "discover_phase_done",
+            phase="enrich",
+            duration_s=round(_time.perf_counter() - _t_s2, 1),
+            papers=len(batch_papers),
+        )
+        _t_enrich = _time.perf_counter()
 
         # Step 3: Embed ABSTRACTS for meaningful similarity scoring.
         # Embed EVERY surviving paper (capped at DISCOVER_EMBED_CAP) — not just
@@ -351,6 +400,12 @@ class PaperTrackerAgent:
         for i, paper in enumerate(embed_papers):
             if i < len(embed_out.embeddings):
                 paper_scores[paper.paper_id] = _cosine(interest_vec, embed_out.embeddings[i])
+
+        logger.info(
+            "discover_phase_done",
+            phase="embed",
+            duration_s=round(_time.perf_counter() - _t_enrich, 1),
+        )
 
         # Step 4: Cluster by authorId
         author_clusters: dict[str, dict[str, Any]] = {}
@@ -389,6 +444,7 @@ class PaperTrackerAgent:
 
         scored.sort(key=lambda x: x[0], reverse=True)
         logger.info("discover_scored", total_scored=len(scored))
+        self.last_discover_stats["scored_count"] = len(scored)
         print(f"[discover] {len(scored)} researchers after scoring")
 
         # Step 5.5 — Collapse co-workers sharing most of their papers.
@@ -507,7 +563,13 @@ class PaperTrackerAgent:
         # single region cannot crowd out the others.
         results = _select_by_region(verified_results, self._discover_regions())
 
-        logger.info("discover_complete", candidates=len(results))
+        self.last_discover_stats["verified_count"] = len(verified_results)
+        self.last_discover_stats["total_s"] = round(_time.perf_counter() - _t0, 1)
+        logger.info(
+            "discover_complete",
+            candidates=len(results),
+            total_s=self.last_discover_stats["total_s"],
+        )
         return results
 
     async def _verify_one_candidate(
@@ -808,6 +870,7 @@ class PaperTrackerAgent:
             "verify_source": verify_source,
             "author_in_top_paper": author_in_top_paper,
             "co_workers": co_workers,
+            "seed_source": seed_source,
             "sample_titles": [p.title[:100] for p in data["papers"][:3]],
         }
 
