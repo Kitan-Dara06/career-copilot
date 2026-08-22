@@ -66,9 +66,6 @@ from .planning_writes import (
 )
 from .policy import apply_policy
 
-mcp = _LoggingFastMCP("career-copilot")
-
-
 class _LoggingFastMCP(FastMCP):
     """FastMCP that records every tool call to ``hermes_tool_calls`` (§15).
 
@@ -110,6 +107,9 @@ class _LoggingFastMCP(FastMCP):
                     outcome="error" if exc_text is not None else "success",
                 )
             )
+
+
+mcp = _LoggingFastMCP("career-copilot")
 
 
 def _profile_query_default() -> str:

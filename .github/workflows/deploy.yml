@@ -27,8 +27,11 @@ jobs:
 
       - name: Build and push hermes image
         run: |
-          docker build -t careercopilot.azurecr.io/career-copilot-hermes:latest -f deploy/hermes/Dockerfile .
+          docker build -t careercopilot.azurecr.io/career-copilot-hermes:latest \
+            -t careercopilot.azurecr.io/career-copilot-hermes:${GITHUB_SHA::8} \
+            -f deploy/hermes/Dockerfile .
           docker push careercopilot.azurecr.io/career-copilot-hermes:latest
+          docker push careercopilot.azurecr.io/career-copilot-hermes:${GITHUB_SHA::8}
 
       - name: Install containerapp CLI
         run: az extension add --name containerapp --upgrade
@@ -52,7 +55,10 @@ jobs:
             'FIRECRAWL_API_KEY=${{ secrets.FIRECRAWLAPIKEY }}'
             'GITHUB_TOKEN=${{ secrets.GITHUBTOKEN }}'
           )
-          IMAGE=careercopilot.azurecr.io/career-copilot-hermes:latest
+          # SHA-suffixed tag: the updated app's image field changes on every
+          # push, so `az containerapp update` rolls a real revision instead of
+          # no-opping on an unchanged `:latest` string.
+          IMAGE=careercopilot.azurecr.io/career-copilot-hermes:${GITHUB_SHA::8}
           if az containerapp show --name career-copilot-hermes --resource-group career-copilot > /dev/null 2>&1; then
             echo "Updating existing hermes app..."
             # Update reuses the ACR credentials already stored on the app;
@@ -100,8 +106,10 @@ jobs:
 
       - name: Build and push image
         run: |
-          docker build -t careercopilot.azurecr.io/career-copilot:latest .
+          docker build -t careercopilot.azurecr.io/career-copilot:latest \
+            -t careercopilot.azurecr.io/career-copilot:${GITHUB_SHA::8} .
           docker push careercopilot.azurecr.io/career-copilot:latest
+          docker push careercopilot.azurecr.io/career-copilot:${GITHUB_SHA::8}
 
       - name: Install containerapp CLI
         run: az extension add --name containerapp --upgrade
@@ -117,7 +125,7 @@ jobs:
             --name career-copilot-bot \
             --resource-group career-copilot \
             --environment career-copilot-env \
-            --image careercopilot.azurecr.io/career-copilot:latest \
+            --image careercopilot.azurecr.io/career-copilot:${GITHUB_SHA::8} \
             --registry-server careercopilot.azurecr.io \
             --registry-username $(az acr credential show --name careercopilot --query username -o tsv) \
             --registry-password $(az acr credential show --name careercopilot --query "passwords[0].value" -o tsv) \
@@ -151,7 +159,8 @@ jobs:
             'HERMES_API_URL=https://${{ env.HERMES_FQDN }}/v1'
             'HERMES_API_KEY=${{ secrets.HERMESAPIKEY }}'
           )
-          IMAGE=careercopilot.azurecr.io/career-copilot:latest
+          # SHA-suffixed tag so re-runs roll a new revision (see deploy-hermes).
+          IMAGE=careercopilot.azurecr.io/career-copilot:${GITHUB_SHA::8}
           if az containerapp show --name career-copilot-worker --resource-group career-copilot > /dev/null 2>&1; then
             echo "Updating existing worker app..."
             az containerapp update \
