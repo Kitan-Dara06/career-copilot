@@ -17,6 +17,7 @@ history every time.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import httpx
@@ -32,6 +33,32 @@ PLANNING_USER = "aaliyah"
 
 
 _SYSTEM_PROMPT: str | None = None
+
+# The Hermes api_server IGNORES system-role messages, so guidance must be
+# injected as a user-role block right before the user's message. This notice
+# fixes two observed failure modes: (1) the model echoing its own earlier
+# "tools not available" hallucination from chat history, and (2) flash-lite
+# under-discovering the career.* tools when the request is free-form.
+_ENV_NOTICE = (
+    "[Environment] You have these tools, and they are all available and working: "
+    "career.profile.get, career.papers.search, career.professors.search, "
+    "career.professors.web_search, career.jobs.search, career.planning.get_summary, "
+    "career.planning.list_workspaces, career.planning.get_workspace, "
+    "career.planning.list_goals, career.planning.list_tasks, "
+    "career.planning.list_decisions, career.planning.list_notes, "
+    "career.planning.list_artifacts, and the career.planning write tools. "
+    "Never claim a tool is missing or unavailable; if a tool call errors, read "
+    "the error and retry or rephrase. For professor briefs or fit questions, call "
+    "career.professors.search AND career.profile.get (for the user's interests), "
+    "then answer from the returned data."
+)
+
+# Assistant messages that only repeat a tools-unavailable hallucination add
+# noise and poison later turns; drop them from the history sent to Hermes.
+_UNHEALTHY_REFUSAL_RE = re.compile(
+    r"tool(s)? .{0,40}(not available|missing)|cannot fulfill this request",
+    re.IGNORECASE,
+)
 
 
 def _default_system_prompt() -> str:
@@ -172,6 +199,10 @@ class HermesBridge:
             headers["Authorization"] = f"Bearer {self._settings.hermes_api_key}"
 
         history = self._history.get(chat_id, [])
+        # Drop earlier assistant turns that only repeat a tools-unavailable
+        # hallucination — they poison later turns and the api_server ignores
+        # system messages, so a corrective notice is the only place to act.
+        history = [h for h in history if not _UNHEALTHY_REFUSAL_RE.search(h.get("content", ""))]
         messages: list[dict[str, str]] = []
         if system_prompt is not None:
             messages.append({"role": "system", "content": system_prompt})
@@ -184,6 +215,9 @@ class HermesBridge:
         context = await _workspace_context(PLANNING_USER)
         if context:
             messages.append({"role": "user", "content": context})
+        # Capability notice rides in a user-role block (system messages are
+        # ignored by the api_server) so Hermes never denies its own tools.
+        messages.append({"role": "user", "content": _ENV_NOTICE})
         messages.append({"role": "user", "content": message})
 
         payload: dict[str, Any] = {
