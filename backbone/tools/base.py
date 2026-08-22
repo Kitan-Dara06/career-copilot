@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from enum import StrEnum
-from typing import Any, TypeVar
+from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel
 
@@ -52,7 +52,7 @@ class ToolContext(BaseModel):
     prompt_logger: Any = None
 
 
-class Tool[TIn, TOut](ABC):
+class Tool(ABC, Generic[TIn, TOut]):
     """Abstract base for every tool in the registry.
 
     Subclasses must define: ``name``, ``description``, ``input_schema``,
