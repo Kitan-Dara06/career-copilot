@@ -53,6 +53,7 @@ jobs:
             'TAVILY_API_KEY=${{ secrets.TAVILYAPIKEY }}'
             'VOYAGE_API_KEY=${{ secrets.VOYAGEAPIKEY }}'
             'FIRECRAWL_API_KEY=${{ secrets.FIRECRAWLAPIKEY }}'
+            'SEMANTIC_SCHOLAR_API_KEY=${{ secrets.SEMANTICSCHOLARAPIKEY }}'
             'GITHUB_TOKEN=${{ secrets.GITHUBTOKEN }}'
           )
           # SHA-suffixed tag: the updated app's image field changes on every
@@ -139,6 +140,7 @@ jobs:
               QDRANT_API_KEY=${{ secrets.QDRANTAPIKEY }} \
               TAVILY_API_KEY=${{ secrets.TAVILYAPIKEY }} \
               FIRECRAWL_API_KEY=${{ secrets.FIRECRAWLAPIKEY }} \
+              SEMANTIC_SCHOLAR_API_KEY=${{ secrets.SEMANTICSCHOLARAPIKEY }} \
               GITHUB_TOKEN=${{ secrets.GITHUBTOKEN }} \
               HERMES_API_URL=https://${{ env.HERMES_FQDN }}/v1 \
               HERMES_API_KEY=${{ secrets.HERMESAPIKEY }}
@@ -155,6 +157,7 @@ jobs:
             'QDRANT_API_KEY=${{ secrets.QDRANTAPIKEY }}'
             'TAVILY_API_KEY=${{ secrets.TAVILYAPIKEY }}'
             'FIRECRAWL_API_KEY=${{ secrets.FIRECRAWLAPIKEY }}'
+            'SEMANTIC_SCHOLAR_API_KEY=${{ secrets.SEMANTICSCHOLARAPIKEY }}'
             'GITHUB_TOKEN=${{ secrets.GITHUBTOKEN }}'
             'HERMES_API_URL=https://${{ env.HERMES_FQDN }}/v1'
             'HERMES_API_KEY=${{ secrets.HERMESAPIKEY }}'
