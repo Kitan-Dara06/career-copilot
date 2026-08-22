@@ -1122,8 +1122,26 @@ class PaperTrackerAgent:
             row = result.one_or_none()
 
         if row is None:
-            logger.warning("brief_data_not_found", name=name)
-            return {"error": f"Professor {name!r} not in watchlist. Use /watch add first."}
+            # A brief shouldn't require a prior /watch add — auto-add the
+            # professor (arXiv verify + homepage + storage) and retry.
+            logger.info("brief_data_auto_add", name=name)
+            try:
+                await self.watch_add(name)
+            except ValueError as exc:
+                return {"error": str(exc)}
+            async with factory() as session:
+                result = await session.execute(
+                    text(
+                        "SELECT name, affiliation, homepage_url"
+                        " FROM professors WHERE name ILIKE :name LIMIT 1"
+                    ),
+                    {"name": f"%{name}%"},
+                )
+                row = result.one_or_none()
+            if row is None:
+                return {
+                    "error": f"Could not add professor {name!r} (not verified on arXiv)."
+                }
 
         db_name = row.name
         affiliation = row.affiliation or ""

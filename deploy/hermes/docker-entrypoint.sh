@@ -95,4 +95,15 @@ API_SERVER_PORT=${API_SERVER_PORT:-8642}
 ENV
 
 echo "Rendered Hermes config. Starting gateway (API_SERVER_HOST=${API_SERVER_HOST:-0.0.0.0}:${API_SERVER_PORT:-8642})..."
+
+# Ship the gitignored profile data (base64 env secrets) so the career_copilot
+# MCP server (career.profile.get etc.) serves the real profile in this container.
+mkdir -p /app/career-copilot/data
+if [ -n "${USER_PROFILE_B64:-}" ]; then
+  echo "$USER_PROFILE_B64" | base64 -d > /app/career-copilot/data/user_profile.yaml
+fi
+if [ -n "${USER_SKILLS_B64:-}" ]; then
+  echo "$USER_SKILLS_B64" | base64 -d > /app/career-copilot/data/user_skills.yaml
+fi
+
 exec /opt/hermes-agent/.venv/bin/python /opt/hermes-agent/hermes gateway
