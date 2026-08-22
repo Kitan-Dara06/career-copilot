@@ -368,9 +368,34 @@ def wire_paper_tracker(dispatcher: Dispatcher) -> None:
         return TaskResult(task_id=task.id, success=True, output="⏭️ Skipped")
 
     async def handle_brief(task: Task) -> TaskResult:
-        """Handle 📋 Brief button — triggers same flow as /prof."""
+        """Handle 📋 Brief button — triggers same flow as /prof.
+
+        The button payload carries a short last-name token (``p``) to stay
+        under Telegram's 64-byte callback_data limit; resolve it to the full
+        row name before building the brief. Legacy payloads with the full
+        ``professor`` name still work.
+        """
+        prof_token = task.payload.get("p", "")
         professor_name = task.payload.get("professor", "")
         item_id = task.payload.get("item_id", "")
+
+        if prof_token:
+            from sqlalchemy import text
+
+            from backbone.db.session import async_session_factory
+
+            factory = async_session_factory()
+            async with factory() as session:
+                result = await session.execute(
+                    text(
+                        "SELECT name FROM professors "
+                        "WHERE name ILIKE :tok ORDER BY LENGTH(name) LIMIT 1"
+                    ),
+                    {"tok": f"%{prof_token}%"},
+                )
+                row = result.one_or_none()
+            if row is not None:
+                professor_name = row.name
 
         if not professor_name:
             return TaskResult(

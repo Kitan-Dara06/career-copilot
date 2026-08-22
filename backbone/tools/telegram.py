@@ -64,6 +64,20 @@ def _clean(text: str) -> str:
     return text
 
 
+def _button_token(name: str) -> str:
+    """Short alphanumeric token for a professor in callback_data.
+
+    Telegram caps callback_data at 64 bytes, and a full professor name
+    (or the JSON wrapper) blows past it, so the whole message is rejected.
+    We pass the last name instead and resolve it server-side (handle_brief).
+    """
+    import re
+
+    last = (name or "").strip().split()[-1] if (name or "").strip() else ""
+    token = re.sub(r"[^A-Za-z0-9]", "", last)
+    return (token or "unknown")[:10]
+
+
 async def _post(settings: Any, method: str, payload: dict[str, Any]) -> dict[str, Any]:
     token = settings.telegram_bot_token
     url = f"https://api.telegram.org/bot{token}/{method}"
@@ -176,7 +190,10 @@ class SendDigestTool(Tool[SendDigestInput, SendDigestOutput]):
                         },
                         {
                             "text": "📋 Brief",
-                            "callback_data": f'{{"command":"brief","item_id":"{item.arxiv_id}","professor":"{item.professor}"}}',
+                            "callback_data": (
+                                f'{{"command":"brief","item_id":"{item.arxiv_id}",'
+                                f'"p":"{_button_token(item.professor)}"}}'
+                            ),
                         },
                     ]
                 ]

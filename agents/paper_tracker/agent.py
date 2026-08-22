@@ -820,7 +820,7 @@ class PaperTrackerAgent:
         reject same-name collisions (a control-theory professor named "Ding Chen"
         is rejected if the user_domain is NLP/IR).
 
-        Routes to ``deepseek-chat`` via its OpenAI-compatible
+        Routes to ``deepseek-v4-pro`` via its OpenAI-compatible
         ``response_format=json_object`` mode. Empirically that mode is reliable
         (Gemini 2.5-flash's responseSchema was returning preambles / truncated
         JSON ~50% of the time, which is why we moved this call to DeepSeek).
@@ -1266,6 +1266,10 @@ class PaperTrackerAgent:
                 )
                 if "REFUSED" in why.upper():
                     return None
+                # ModelClient returns literal "(unavailable)" when the backend
+                # call fails — never leak that placeholder into a digest.
+                if not why.strip() or why.strip().lower() == "(unavailable)":
+                    why = f"Relevant to {paper.title.split(':')[0].strip()}"
             except Exception:
                 why = f"Relevant to {paper.title.split(':')[0].strip()}"
             return {

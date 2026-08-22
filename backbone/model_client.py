@@ -301,9 +301,23 @@ class ModelClient:
             return ""
 
         messages = [{"role": "user", "content": prompt}]
-        # Honor the model passed by the caller. Resolved to the canonical
-        # account-key name: deepseek-v4-flash or deepseek-v4-pro.
-        resolved_model = model if model and model.startswith("deepseek-") else "deepseek-v4-flash"
+        # Honor the model passed by the caller, mapping legacy account names to
+        # the canonical v4 names DeepSeek currently accepts (the API rejects
+        # "deepseek-pro" / "deepseek-chat" with a 400). JSON mode upgrades
+        # flash to pro: v4-flash returns empty responses on large json_object
+        # outputs (finish_reason=length) ~40% of the time.
+        _DEEPSEEK_ALIASES = {
+            "deepseek-chat": "deepseek-v4-pro",
+            "deepseek-pro": "deepseek-v4-pro",
+            "deepseek-reasoner": "deepseek-v4-pro",
+            "deepseek-flash": "deepseek-v4-flash",
+        }
+        if model and model.startswith("deepseek-"):
+            resolved_model = _DEEPSEEK_ALIASES.get(model, model)
+        else:
+            resolved_model = "deepseek-v4-flash"
+        if response_format == "json" and resolved_model == "deepseek-v4-flash":
+            resolved_model = "deepseek-v4-pro"
         payload: dict[str, object] = {
             "model": resolved_model,
             "messages": messages,

@@ -2,7 +2,7 @@ version: 2
 agent: paper_tracker
 name: why_relevant
 model:
-  name: deepseek-pro
+  name: deepseek-v4-flash
   temperature: 0.2
   max_tokens: 100
 input_schema:

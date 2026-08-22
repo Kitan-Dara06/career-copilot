@@ -2,15 +2,14 @@ version: 2
 agent: paper_tracker
 name: professor_verify
 model:
-  # DeepSeek-chat's OpenAI-compatible response_format/json_object mode is the
+  # DeepSeek's OpenAI-compatible response_format/json_object mode is the
   # reliable way to get a single JSON object per call. Gemini-2.5-flash with
   # responseSchema was empirically flaky (returned preambles like
   # "Here is the JSON requested:" or truncated `{" ~50% of the time), so
   # verify uses DeepSeek for stability. Brief path stays on Gemini/Qwen.
-  # The ModelClient auto-upgrades to deepseek-v4-pro for response_format=json
-  # (the cheaper v4-flash emits an empty response + finish_reason=length on
-  # ~40% of verify-sized outputs).
-  name: deepseek-chat
+  # v4-pro (not the cheaper v4-flash, which emits an empty response +
+  # finish_reason=length on ~40% of verify-sized outputs).
+  name: deepseek-v4-pro
   temperature: 0.0
   # 2048 is generous headroom for a 7-field JSON object (~250 tokens). With
   # v4-flash we saw ``finish_reason=length`` truncations at max_tokens=600 —

@@ -63,4 +63,4 @@ def test_model_config_defaults() -> None:
     prompt = load("paper_tracker", "why_relevant", version=1)
     assert prompt.model.temperature == 0.3
     assert prompt.model.max_tokens == 80
-    assert prompt.model.name == "deepseek-pro"  # Assigned per model mapping
+    assert prompt.model.name == "deepseek-v4-flash"  # Assigned per model mapping

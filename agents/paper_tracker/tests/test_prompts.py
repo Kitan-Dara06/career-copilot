@@ -58,8 +58,8 @@ def test_model_assignments() -> None:
     """Each prompt has the correct model assigned."""
     assignments = {
         ("summarize_paper", 1): "gemini-2.5-flash",
-        ("why_relevant", 1): "deepseek-pro",
-        ("why_relevant", 2): "deepseek-pro",
+        ("why_relevant", 1): "deepseek-v4-flash",
+        ("why_relevant", 2): "deepseek-v4-flash",
         ("professor_why", 1): "gemini-2.5-flash",
         ("professor_brief", 1): "gemini-2.5-flash",
         ("professor_discovery", 1): "gemini-2.5-flash",
